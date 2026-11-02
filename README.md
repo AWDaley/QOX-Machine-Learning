@@ -2,6 +2,12 @@
 
 **Current status: M0–M9 implemented (deterministic ecosystem, species-specific PPO, learned-herd experiments, ravager intelligence, scavenger nutrient competition, and three festival types).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
 
+## M12 — Confirmed ecosystem events and action feedback
+
+The M11 pixel-art viewer now draws **confirmed** action effects instead of assuming that requested actions succeeded. It shows ravager charge wind-ups, hits and misses, distinct nomad calls, harvest and fertilizer sparks, carcass handling, births, deaths and festivals. A bounded recent-event feed can focus the camera on specific incidents. The actor inspector reports **No confirmed outcome** when a requested action has no matching world event. These features never change physics, RNG, neural weights or deterministic replay.
+
+New controls: **E** toggle feed, **T** switch major/all events, **V** toggle effects, **H** toggle corner badges. Click an event row to focus its location. See [M12 visual event documentation](docs/M12_VISUAL_EVENTS.md).
+
 ## M8 — Festivals and prosperity
 
 The new M8 implementation adds **farmer-only, nomad-only and combined festivals**:
