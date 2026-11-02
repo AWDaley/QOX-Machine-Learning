@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from queue import Empty, SimpleQueue
 from uuid import uuid4
 import tempfile
-import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .config import SimulationConfig
-from .desktop_models import (ModelSession, MultiPolicyController, ROLES,
-                             train_role)
+from .desktop_models import ModelSession, MultiPolicyController, ROLES
 from .entities import Species
+from .training_lab import CheckpointHistory
 
 
 ROLE_LABELS = {species.value: species.value.capitalize() for species in ROLES}
@@ -38,7 +36,8 @@ class QoxDesktop:
         self.root.configure(background="#161e29")
         self.workspace = tempfile.TemporaryDirectory(prefix="qox-desktop-")
         self.session = ModelSession.fresh(Path(self.workspace.name) / "active", seed=42)
-        self.queue: SimpleQueue = SimpleQueue()
+        self.model_history = CheckpointHistory(Path(self.workspace.name) / "accepted-history")
+        self.training_window = None
         self.busy = False
         self.buttons: list[ttk.Button] = []
         self.status_var = tk.StringVar(value="Ready. Five new UNTRAINED networks created.")
@@ -53,7 +52,6 @@ class QoxDesktop:
         self._configure_style()
         self._draw()
         self._refresh_species()
-        self.root.after(150, self._poll)
         self.root.protocol("WM_DELETE_WINDOW", self._close)
 
     def _setup_file_menu(self) -> None:
@@ -153,8 +151,8 @@ class QoxDesktop:
                                                            padx=5, pady=5)
         ttk.Entry(frame, textvariable=self.seed_var).grid(row=9, column=2, sticky="ew",
                                                           padx=5, pady=5)
-        self._button(frame, "Train selected species", self._train, 10, 0, width=20)
-        ttk.Label(frame, text="Training uses dedicated PPO scenarios; the open viewer does NOT train.",
+        self._button(frame, "Open training lab", self._train, 10, 0, width=20)
+        ttk.Label(frame, text="Train, compare on held-out worlds, accept or rollback. Viewer does not train.",
                   style="Muted.TLabel", wraplength=460).grid(
             row=10, column=1, columnspan=2, sticky="w", padx=8)
 
@@ -205,6 +203,7 @@ class QoxDesktop:
             new = ModelSession.fresh(Path(self.workspace.name) / f"new-{uuid4().hex}", seed=seed)
             # A separate directory makes replacement robust after cancelled load.
             self.session = new
+            self.model_history.clear()
             self._refresh_species()
             self.status_var.set(f"Created five UNTRAINED neural networks (seed {seed}).")
         except Exception as exc:
@@ -221,6 +220,7 @@ class QoxDesktop:
         try:
             session = ModelSession.load(Path(path), Path(self.workspace.name) / f"loaded-{uuid4().hex}")
             self.session = session
+            self.model_history.clear()
             self._refresh_species()
             self.status_var.set(f"Loaded all five networks from {Path(path).name}.")
         except Exception as exc:
@@ -306,64 +306,30 @@ class QoxDesktop:
     def _train(self):
         if self.busy:
             return
-        try:
-            role = Species(self.species_var.get())
-            steps = _parse_positive_integer(self.steps_var.get(), name="Training decisions")
-            seed = _parse_positive_integer(self.seed_var.get(), name="Seed", minimum=0)
-        except Exception as exc:
-            messagebox.showerror("Invalid training settings", str(exc), parent=self.root)
+        if self.training_window is not None:
+            self.training_window.root.lift()
+            self.training_window.root.focus_force()
             return
-        source = self.session.path(role)
-        destination = Path(self.workspace.name) / f"training-{role.value}.pt"
-        self._set_busy(True)
-        self.status_var.set(f"Training {role.value} for {steps:,} PPO decisions... "
-                            "This runs in a separate training world.")
-
-        def worker():
-            try:
-                report = train_role(role, source, destination, steps=steps, seed=seed)
-                self.queue.put((role, destination, report, None))
-            except Exception as exc:
-                self.queue.put((role, destination, None, str(exc)))
-
-        threading.Thread(target=worker, name="qox-ppo-training", daemon=True).start()
-
-    def _poll(self):
-        try:
-            while True:
-                role, destination, report, error = self.queue.get_nowait()
-                self._set_busy(False)
-                if error:
-                    self.status_var.set(f"Training failed: {error}")
-                    messagebox.showerror("Training error", error, parent=self.root)
-                else:
-                    try:
-                        self.session.replace(role, destination, origin="trained")
-                        self._refresh_species()
-                        self.status_var.set(
-                            f"Trained {role.value}; {self.session.status[role].steps:,} decisions "
-                            f"total ({int(report.get('completed_episodes', 0))} training episodes). "
-                            "Save your QOX model set now.")
-                    except Exception as exc:
-                        messagebox.showerror("Cannot apply checkpoint", str(exc),
-                                             parent=self.root)
-        except Empty:
-            pass
-        self.root.after(150, self._poll)
+        from .desktop_training import TrainingLabWindow
+        self.training_window = TrainingLabWindow(self)
 
     def _close(self):
-        if self.busy and not messagebox.askyesno(
-                "Training running", "Training is still running. Quit without saving its result?",
-                parent=self.root):
+        if self.busy:
+            if self.training_window is not None:
+                self.training_window.cancel()
+            messagebox.showinfo("Training in progress",
+                                "Cancellation requested. Exit after the current PPO rollout ends.",
+                                parent=self.root)
             return
         if self.session.dirty and not messagebox.askyesno(
                 "Unsaved neural networks", "Quit without saving the current model set?",
                 parent=self.root):
             return
+        if self.training_window is not None and not self.training_window.close():
+            return
+        self.model_history.clear()
         self.root.destroy()
-        # Do not delete files still in use by a running Windows worker thread.
-        if not self.busy:
-            self.workspace.cleanup()
+        self.workspace.cleanup()
 
 
 def smoke_test() -> int:

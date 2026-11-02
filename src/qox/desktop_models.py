@@ -229,59 +229,57 @@ class ModelSession:
 
 
 def train_role(species: Species, start: Path, destination: Path, *,
-               steps: int = 4096, seed: int = 42) -> dict[str, Any]:
-    """Continue PPO from the active checkpoint using an established short curriculum.
+               steps: int = 4096, seed: int = 42, scenario: str | None = None,
+               progress_callback=None, cancel_requested=None) -> dict[str, Any]:
+    """Produce a *candidate* policy using a compatible curriculum.
 
-    Training runs in its own dedicated simulated scenarios, *not* live in the
-    visualized world; the world viewer always uses frozen inference weights.
+    It is the caller's responsibility to compare and explicitly install the
+    candidate; this function never mutates the active model. PPO uses the saved
+    optimizer state if present and starts a new seeded rollout sequence.
     """
     from .learning.cow_ppo import TrainOptions, train_cow
     from .learning.farmer_ppo import FarmerTrainOptions, train_farmer
     from .learning.nomad_ppo import NomadTrainOptions, train_nomad
     from .learning.scavenger_ppo import ScavengerTrainOptions, train_scavenger
     from .learning.ravager_ppo import RavagerTrainOptions, train_ravager
+    from .training_lab import choose_default, scenario_steps, validate_scenario
 
     if steps < 1:
         raise ValueError("Training steps must be positive")
-    starting = checkpoint_information(species, start)
+    starting = checkpoint_information(species, Path(start))
+    version = starting["observation_version"]
+    if scenario is None:
+        scenario = choose_default(species, version)
+    validate_scenario(species, version, scenario)
     hidden = starting["hidden"]
-    roll = 256
+    rollout = 256
+    common = {"steps": steps, "seed": seed, "worlds": 2,
+              "rollout": rollout, "max_steps": scenario_steps(species, scenario),
+              "scenario": scenario, "hidden": hidden}
+    hooks = {"progress_callback": progress_callback, "cancel_requested": cancel_requested}
     if species == Species.COW:
-        cow_calls = starting["observation_version"] == 2
-        scenario = "cow_signal" if cow_calls else "forage"
-        report = train_cow(TrainOptions(steps=steps, seed=seed, worlds=2,
-                                        rollout=roll, max_steps=32 if cow_calls else 64,
-                                        scenario=scenario, cow_calls=cow_calls,
-                                        hidden=hidden), destination,
-                           init_checkpoint=start)
+        report = train_cow(TrainOptions(**common, cow_calls=version == 2),
+                           destination, init_checkpoint=start, **hooks)
     elif species == Species.FARMER:
-        report = train_farmer(FarmerTrainOptions(steps=steps, seed=seed, worlds=2,
-                                                rollout=roll, max_steps=96,
-                                                scenario="farmer_mixed", hidden=hidden),
-                              destination, init_checkpoint=start)
+        report = train_farmer(FarmerTrainOptions(**common), destination,
+                              init_checkpoint=start, **hooks)
     elif species == Species.NOMAD:
-        v2 = starting["observation_version"] == 2
-        report = train_nomad(NomadTrainOptions(steps=steps, seed=seed, worlds=2,
-                                               rollout=roll, max_steps=8,
-                                               scenario="nomad_signal" if v2 else "nomad_herd",
-                                               nomad_v2=v2, hidden=hidden),
-                             destination, init_checkpoint=start)
+        report = train_nomad(NomadTrainOptions(**common, nomad_v2=version == 2),
+                             destination, init_checkpoint=start, **hooks)
     elif species == Species.SCAVENGER:
-        report = train_scavenger(ScavengerTrainOptions(
-            steps=steps, seed=seed, worlds=2, rollout=roll, max_steps=48,
-            scenario="scavenger_mixed", hidden=hidden), destination, init_checkpoint=start)
+        report = train_scavenger(ScavengerTrainOptions(**common), destination,
+                                 init_checkpoint=start, **hooks)
     else:
-        report = train_ravager(RavagerTrainOptions(
-            steps=steps, seed=seed, worlds=2, rollout=roll, max_steps=64,
-            scenario="ravager_mixed", hidden=hidden), destination, init_checkpoint=start)
-    # PPO routines report the current run length; desktop sessions should
-    # display cumulative decisions across repeated train/save/load cycles.
+        report = train_ravager(RavagerTrainOptions(**common), destination,
+                               init_checkpoint=start, **hooks)
     import torch
 
     trained = torch.load(destination, map_location="cpu", weights_only=True)
     trained["completed_steps"] = starting["steps"] + int(trained["completed_steps"])
     torch.save(trained, destination)
     checkpoint_information(species, destination)
+    report["scenario"] = scenario
+    report["cumulative_steps"] = trained["completed_steps"]
     return report
 
 

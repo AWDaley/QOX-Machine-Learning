@@ -82,7 +82,8 @@ def _first_farmer(env: QoxCoreEnv) -> str:
 
 
 def train_farmer(options: FarmerTrainOptions, output: str | Path,
-                 init_checkpoint: str | Path | None = None) -> dict:
+                 init_checkpoint: str | Path | None = None, *,
+                 progress_callback=None, cancel_requested=None) -> dict:
     """Perform PPO updates for at least the requested number of farmer actions."""
     torch.set_num_threads(1)
     torch.manual_seed(options.seed)
@@ -94,6 +95,14 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         raise ValueError("Initial farmer checkpoint hidden size mismatch")
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=options.lr, eps=1e-5)
+    if init_checkpoint is not None:
+        # A continuation uses the prior optimizer state when available.
+        # RNG/rollout trajectories intentionally begin from the new run seed;
+        # this is not a bit-identical mid-episode resume.
+        from_checkpoint = torch.load(init_checkpoint, map_location="cpu", weights_only=True)
+        if from_checkpoint.get("optimizer_state"):
+            optimizer.load_state_dict(from_checkpoint["optimizer_state"])
+
 
     envs = [_fresh_env(options.scenario, options.max_steps) for _ in range(options.worlds)]
     names = [_first_farmer(env) for env in envs]
@@ -105,6 +114,10 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
     steps = 0
     history = []
     while steps < options.steps:
+        if cancel_requested is not None and cancel_requested():
+            from ..training_lab import TrainingCancelled
+            raise TrainingCancelled("Training cancelled at rollout boundary")
+
         observations, masks, actions, logps, values, rewards, dones = [], [], [], [], [], [], []
         for _ in range(options.rollout // options.worlds):
             inputs = torch.as_tensor(np.stack([s["observation"] for s in states]),
@@ -185,6 +198,13 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                         "loss": round(last_loss, 5),
                         "mean_recent_return": round(float(np.mean(completed_returns[-30:])), 4)
                         if completed_returns else None})
+        if progress_callback is not None:
+            point = history[-1]
+            progress_callback({"steps": steps, "total": options.steps,
+                               "completed_episodes": point["completed_episodes"],
+                               "loss": point["loss"],
+                               "mean_return": next((float(v) for k, v in point.items()
+                                                    if "return" in k and v is not None), None)})
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)

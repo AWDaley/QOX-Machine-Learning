@@ -8,6 +8,8 @@ on:
     paths:
       - 'src/qox/desktop.py'
       - 'src/qox/desktop_models.py'
+      - 'src/qox/desktop_training.py'
+      - 'src/qox/training_lab.py'
       - 'src/qox/learning/**'
       - 'src/qox/viewer.py'
       - 'src/qox/viewer_events.py'
@@ -23,6 +25,7 @@ on:
       - 'pyproject.toml'
       - '.github/workflows/desktop-windows.yml'
       - 'tests/test_desktop.py'
+      - 'tests/test_m14_training_lab.py'
 
 jobs:
   build-windows:
@@ -39,7 +42,7 @@ jobs:
       - name: Exercise event overlays using a headless Pygame surface
         run: |
           python -m pip install pytest
-          python -m pytest -q tests/test_m12_pygame.py tests/test_m12_events.py tests/test_m13_analytics.py tests/test_m13_pygame.py
+          python -m pytest -q tests/test_m12_pygame.py tests/test_m12_events.py tests/test_m13_analytics.py tests/test_m13_pygame.py tests/test_m14_training_lab.py
       - name: Build portable desktop folder
         run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name QOX --collect-submodules qox --collect-all pygame qox_desktop.py
       - name: Verify the packaged executable can load, save and run five networks

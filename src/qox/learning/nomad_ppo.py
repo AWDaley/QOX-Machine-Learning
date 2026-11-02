@@ -82,7 +82,8 @@ def _nomad(env: QoxCoreEnv) -> str:
 
 
 def train_nomad(options: NomadTrainOptions, output: str | Path,
-                init_checkpoint: str | Path | None = None) -> dict:
+                init_checkpoint: str | Path | None = None, *,
+                 progress_callback=None, cancel_requested=None) -> dict:
     """Train a role-shared nomad against responsive scripted cattle and ravager."""
     torch.set_num_threads(1)
     torch.manual_seed(options.seed)
@@ -96,6 +97,14 @@ def train_nomad(options: NomadTrainOptions, output: str | Path,
         raise ValueError("Initial nomad checkpoint hidden size does not match requested size")
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=options.lr, eps=1e-5)
+    if init_checkpoint is not None:
+        # A continuation uses the prior optimizer state when available.
+        # RNG/rollout trajectories intentionally begin from the new run seed;
+        # this is not a bit-identical mid-episode resume.
+        from_checkpoint = torch.load(init_checkpoint, map_location="cpu", weights_only=True)
+        if from_checkpoint.get("optimizer_state"):
+            optimizer.load_state_dict(from_checkpoint["optimizer_state"])
+
     envs = [QoxCoreEnv(scenario=options.scenario, max_steps=options.max_steps,
                        scripted_others=True, cow_calls=True,
                        nomad_v2=options.nomad_v2)
@@ -109,6 +118,10 @@ def train_nomad(options: NomadTrainOptions, output: str | Path,
     steps = 0
     history = []
     while steps < options.steps:
+        if cancel_requested is not None and cancel_requested():
+            from ..training_lab import TrainingCancelled
+            raise TrainingCancelled("Training cancelled at rollout boundary")
+
         obs, masks, actions, logps, values, rewards, dones = [], [], [], [], [], [], []
         for _ in range(options.rollout // options.worlds):
             x = torch.as_tensor(np.stack([s["observation"] for s in states]),
@@ -187,6 +200,13 @@ def train_nomad(options: NomadTrainOptions, output: str | Path,
                         "loss": round(last_loss, 5),
                         "mean_recent_return": round(float(np.mean(completed_returns[-30:])), 4)
                         if completed_returns else None})
+        if progress_callback is not None:
+            point = history[-1]
+            progress_callback({"steps": steps, "total": options.steps,
+                               "completed_episodes": point["completed_episodes"],
+                               "loss": point["loss"],
+                               "mean_return": next((float(v) for k, v in point.items()
+                                                    if "return" in k and v is not None), None)})
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
