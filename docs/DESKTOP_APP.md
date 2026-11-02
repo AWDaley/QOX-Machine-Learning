@@ -23,10 +23,21 @@ qox-desktop
 
 Or run `python qox_desktop.py` from the repo root.
 
+## Neural network training laboratory (M14)
+
+Click **Open training lab** to select a species, a checkpoint-compatible curriculum,
+training decisions, and held-out evaluation budget. The training progress chart
+updates after PPO rollouts. When training finishes, the active and candidate
+networks are evaluated on identical unseen seeds alongside a scripted reference.
+Select **Accept**, **Reject**, or **Rollback last accepted**. Training no longer
+replaces the current model automatically. Undo history is temporary until you
+save all five networks as a `.qox` model set. See
+[the complete M14 training guide](M14_TRAINING_LAB.md) for limitations.
+
 ## Menu choices
 
 - **New neural nets:** initializes five distinct networks with random weights and a configurable seed. They are initially untrained.
-- **Train selected species:** continues training its current weights with PPO in a dedicated short scenario. Default 4,096 decisions; longer curricula are possible. The main menu remains responsive. Upon successful training, the trained checkpoint becomes the active model for that species.
+- **Open training lab:** continue PPO in a chosen scenario, monitor learning progress, compare the candidate on held-out worlds, and explicitly accept, reject, or roll back changes. Default 4,096 decisions; the main menu stays responsive.
 - **Start simulation:** runs all five currently active policies simultaneously in a new seeded world. Actions are sampled from learned probabilities by default; uncheck *Sample neural actions* to pick the highest-probability action.
 - **Scripted simulation:** runs a scripted reference simulation with the same world settings.
 - **Save model set:** writes one `.qox` archive with all five neural weights, observation/action schema metadata, and training decision counters. Saving is a manual step after training.

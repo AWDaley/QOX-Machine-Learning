@@ -231,6 +231,19 @@ qox population-study --ticks 1200 --seeds 5 --seed 260000 --mode scripted --fest
 The counterfactual keeps adult maturity and aging enabled in **both** conditions. `population-study --mode learned` loads frozen checkpoint(s) for selected species and keeps omitted species scripted; consult [`docs/M9_POPULATION_DYNAMICS.md`](docs/M9_POPULATION_DYNAMICS.md) for exact options and limitations. M9 has **not** demonstrated a permanently stable or independently learned ecosystem.
 
 
+## M14: Desktop neural-network training laboratory
+
+The Windows desktop app now offers **Open training lab** with a role-specific
+scenario selector, rollout-by-rollout PPO progress and a graph of training return
+and loss. Training creates a candidate checkpoint, then compares **current vs
+candidate vs scripted** on matched held-out seeds. Users explicitly accept or
+reject; each accepted change can be rolled back within the current session.
+Cancellation stops before the next rollout without overwriting the current
+network. Adam optimizer state is restored for continued training when present;
+this is **not** an exact resumed rollout or live training inside the viewer.
+Save accepted models with **Save model set**. See
+[the M14 developer and user guide](docs/M14_TRAINING_LAB.md).
+
 ## Windows desktop app (M10)
 
 QOX now has a **launcher with buttons**, built as a portable Windows `QOX.exe` using PyInstaller in GitHub Actions. It supports five **fresh untrained** neural networks, training one species using PPO, importing existing actor checkpoints, saving all five models to a `.qox` file, loading them back, and viewing all five policies in the 2D world.
