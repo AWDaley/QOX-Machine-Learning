@@ -11,7 +11,7 @@ def random_actions(world: World) -> dict[int, Action]:
     """Seeded, intentionally weak legal-ish random baseline."""
     possible = {
         Species.FARMER: (Kind.PLANT, Kind.HARVEST, Kind.COLLECT_WASTE,
-                         Kind.FERTILIZE, Kind.DEPOSIT, Kind.EAT),
+                         Kind.FERTILIZE, Kind.DEPOSIT, Kind.EAT, Kind.ENTER_REFUGE),
         Species.COW: (Kind.GRAZE,),
         Species.NOMAD: (Kind.MILK, Kind.EAT),
         Species.SCAVENGER: (Kind.EAT, Kind.EAT_CARCASS),
@@ -28,7 +28,7 @@ def random_actions(world: World) -> dict[int, Action]:
 
 
 def _toward(world: World, actor: Actor, target: tuple[int, int]) -> Action:
-    occupied = {a.position for a in world.actors.values()}
+    occupied = {a.position for a in world.actors.values() if not a.sheltered}
     possibilities = []
     for dx, dy in DIRECTIONS:
         x, y = actor.x + dx, actor.y + dy
@@ -69,7 +69,22 @@ def scripted_actions(world: World) -> dict[int, Action]:
                 action = _toward(world, actor, target) if target else Action(Kind.REST)
         elif actor.species == Species.FARMER:
             home = next(s for s in world.settlements if s.id == actor.home_id)
-            if actor.energy < 45 and (actor.carried_food >= 1 or
+            threats = [r for r in world.actors.values()
+                       if r.species == Species.RAVAGER and not r.sheltered
+                       and abs(r.x - actor.x) + abs(r.y - actor.y) <= 4]
+            if actor.sheltered:
+                if actor.energy < 40 and world._nearby_settlement(actor):
+                    action = Action(Kind.EAT)
+                elif threats:
+                    action = Action(Kind.REST)
+                else:
+                    target = _nearest(world, actor, lambda t: t.crop >= 1.5)
+                    action = _toward(world, actor, target or (home.x + 2, home.y))
+            elif threats and world._nearby_settlement(actor) and actor.home_id == world._nearby_settlement(actor).id:
+                action = Action(Kind.ENTER_REFUGE)
+            elif threats:
+                action = _toward(world, actor, (home.x, home.y))
+            elif actor.energy < 45 and (actor.carried_food >= 1 or
                                        world._nearby_settlement(actor)):
                 action = Action(Kind.EAT)
             elif actor.carried_food > 4 and world._nearby_settlement(actor):
@@ -114,6 +129,7 @@ def scripted_actions(world: World) -> dict[int, Action]:
             # sneak/charge/drag/hibernate behavior is reserved for M6.
             prey = sorted((a for a in world.actors.values()
                            if a.id != actor.id and a.species != Species.RAVAGER
+                           and not a.sheltered
                            and abs(a.x - actor.x) + abs(a.y - actor.y) <= 6),
                           key=lambda a: (abs(a.x - actor.x) + abs(a.y - actor.y), a.id))
             nearby = [a for a in prey if abs(a.x - actor.x) + abs(a.y - actor.y) <= 1]

@@ -45,11 +45,12 @@ def run(config: SimulationConfig, ticks: int, mode: str = "scripted",
     world = World(config)
     trace = Trace(config.as_dict()) if record else None
     controller = None
-    if mode == "learned-cow":
+    if mode in ("learned-cow", "learned-farmer"):
         if checkpoint is None:
-            raise ValueError("--checkpoint is required for learned-cow mode")
-        from .learning.inference import CowController
-        controller = CowController(checkpoint)
+            raise ValueError("--checkpoint is required for learned actor mode")
+        from .learning.inference import CowController, FarmerController
+        controller = (CowController(checkpoint) if mode == "learned-cow"
+                      else FarmerController(checkpoint))
     for _ in range(ticks):
         orders = controller.actions(world) if controller else actions_for(world, mode)
         world.step(orders)

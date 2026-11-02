@@ -7,7 +7,7 @@ from qox.actions import Action, Kind
 from qox.config import SimulationConfig
 from qox.entities import Species
 from qox.envs.core import QoxCoreEnv
-from qox.perception import ACTIONS, FEATURES, OBSERVATION_SIZE, observe
+from qox.perception import ACTIONS, FEATURES, OBSERVATION_SIZE, observe, observation_size
 from qox.world import World
 
 
@@ -22,7 +22,7 @@ def test_observation_schema_ranges_and_masks_for_all_species():
     assert len(FEATURES) == OBSERVATION_SIZE == len(set(FEATURES))
     for actor in world.actors.values():
         obs = observe(world, actor)
-        assert obs["observation"].shape == (OBSERVATION_SIZE,)
+        assert obs["observation"].shape == (observation_size(actor.species),)
         assert obs["observation"].dtype == np.float32
         assert np.isfinite(obs["observation"]).all()
         assert (obs["observation"] >= -1).all()

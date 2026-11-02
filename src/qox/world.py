@@ -84,7 +84,8 @@ class World:
 
     def _movement(self, orders: dict[int, Action]) -> None:
         """Resolve destinations together; permit swaps/chains but never co-occupation."""
-        occupied = {(actor.x, actor.y): actor.id for actor in self.actors.values()}
+        # Sheltered farmers occupy interior refuge slots, not outside grid cells.
+        occupied = {a.position: a.id for a in self.actors.values() if not a.sheltered}
         requests: dict[tuple[int, int], list[int]] = defaultdict(list)
         for aid in sorted(self.actors):
             actor = self.actors[aid]
@@ -111,19 +112,56 @@ class World:
                     changed = True
         for aid, (x, y) in sorted(winners.items()):
             actor = self.actors[aid]
+            was_sheltered = actor.sheltered
             actor.x, actor.y = x, y
+            actor.sheltered = False
+            if was_sheltered:
+                self.emit("exit_refuge", aid, detail=str(actor.home_id))
             actor.stamina = max(0.0, actor.stamina - 0.5)
             actor.energy = max(0.0, actor.energy - 0.07)
             self.emit("move", aid, detail=f"{x},{y}")
 
+    def home(self, actor: Actor) -> Settlement | None:
+        return next((s for s in self.settlements if s.id == actor.home_id), None)
+
+    def refuge_occupants(self, settlement_id: int) -> int:
+        return sum(a.sheltered and a.home_id == settlement_id for a in self.actors.values())
+
+    def _enter_refuges(self, orders: dict[int, Action]) -> None:
+        """Admit only eligible adjacent home farmers into finite interior capacity.
+
+        Simultaneous entry requests are resolved by a seeded lottery per shelter.
+        Nobody is teleported from outside the entrance's immediate neighborhood.
+        """
+        for home in self.settlements:
+            candidates = sorted(a.id for a in self.actors.values()
+                                if a.species == Species.FARMER and a.home_id == home.id
+                                and not a.sheltered and a.stamina >= 1
+                                and orders.get(a.id, Action()).kind == Kind.ENTER_REFUGE
+                                and abs(a.x - home.x) + abs(a.y - home.y) <= 1)
+            vacancies = max(0, home.refuge_capacity - self.refuge_occupants(home.id))
+            if not vacancies or not candidates:
+                continue
+            self.rng.shuffle(candidates)
+            for aid in candidates[:vacancies]:
+                actor = self.actors[aid]
+                actor.sheltered = True
+                actor.x, actor.y = home.x, home.y
+                actor.stamina = max(0.0, actor.stamina - 1)
+                self.emit("enter_refuge", aid, detail=str(home.id))
+
     def _nearby_settlement(self, actor: Actor) -> Settlement | None:
         return next((s for s in self.settlements
-                     if abs(actor.x - s.x) + abs(actor.y - s.y) <= 1), None)
+                     if (actor.home_id is None or actor.home_id == s.id)
+                     and abs(actor.x - s.x) + abs(actor.y - s.y) <= 1), None)
 
     def _interact(self, actor: Actor, action: Action) -> None:
         tile = self.grid.get(actor.x, actor.y)
         kind = action.kind
-        if kind in (Kind.WAIT, Kind.MOVE):
+        if kind in (Kind.WAIT, Kind.MOVE, Kind.ENTER_REFUGE):
+            return
+        # Interior shelter excludes all field work and physical attacks.
+        if actor.sheltered and kind not in (Kind.REST, Kind.EAT, Kind.DEPOSIT):
             return
         if kind == Kind.REST:
             actor.stamina = min(100.0, actor.stamina + 3.0)
@@ -212,6 +250,7 @@ class World:
             if actor.stamina >= 4.0:
                 victims = sorted((a for a in self.actors.values()
                                   if a.id != actor.id and a.species != Species.RAVAGER
+                                  and not a.sheltered
                                   and abs(a.x - actor.x) + abs(a.y - actor.y) <= 1),
                                  key=lambda a: (a.health, a.id))
                 if victims:
@@ -257,6 +296,23 @@ class World:
                 del self.carcasses[carcass.id]
 
     def _metabolism(self) -> None:
+        # Occupied shelters consume REAL stored food, which is distributed
+        # fairly among residents. No ration appears from thin air, and actors
+        # cannot gain energy beyond their maximum from shelter food.
+        for home in self.settlements:
+            residents = [a for a in self.actors.values()
+                         if a.sheltered and a.home_id == home.id]
+            if residents and home.stored_food > 0:
+                quota = min(self.config.refuge_ration,
+                            home.stored_food / len(residents))
+                portions = [(a, min(quota, (100.0 - a.energy) / 6.0))
+                            for a in residents]
+                for actor, amount in portions:
+                    if amount > 0:
+                        actor.energy = min(100.0, actor.energy + amount * 6.0)
+                        home.stored_food -= amount
+                        self.emit("refuge_ration", actor.id, amount, str(home.id))
+                home.stored_food = max(0.0, home.stored_food)
         costs = {Species.FARMER: 0.035, Species.COW: self.config.cow_metabolism, Species.NOMAD: 0.05,
                  Species.SCAVENGER: 0.035, Species.RAVAGER: 0.07}
         for aid, actor in list(sorted(self.actors.items())):
@@ -283,6 +339,7 @@ class World:
         self.tick += 1
         self.last_events = []
         self._movement(orders)
+        self._enter_refuges(orders)
         # Stable ID order matters for deterministic shared-resource resolution.
         for aid in sorted(self.actors):
             self._interact(self.actors[aid], orders.get(aid, Action()))
@@ -293,7 +350,17 @@ class World:
 
     def check_invariants(self) -> None:
         cfg = self.config
-        assert len({a.position for a in self.actors.values()}) == len(self.actors)
+        outside = [a.position for a in self.actors.values() if not a.sheltered]
+        assert len(set(outside)) == len(outside)
+        for actor in self.actors.values():
+            if actor.sheltered:
+                home = self.home(actor)
+                assert actor.species == Species.FARMER and home is not None
+                assert actor.position == (home.x, home.y)
+            else:
+                assert all(actor.position != (s.x, s.y) for s in self.settlements)
+        assert all(self.refuge_occupants(s.id) <= s.refuge_capacity
+                   for s in self.settlements)
         for a in self.actors.values():
             assert self.grid.contains(a.x, a.y)
             assert 0 <= a.health <= 100 and 0 <= a.energy <= 100
@@ -334,6 +401,7 @@ class World:
             "crops": round(sum(t.crop for t in self.grid.tiles), 3),
             "waste": round(sum(t.waste for t in self.grid.tiles), 3),
             "stored_food": round(sum(s.stored_food for s in self.settlements), 3),
+            "sheltered_farmers": sum(a.sheltered for a in self.actors.values()),
             "carcass_meat": round(sum(c.meat for c in self.carcasses.values()), 3),
             "events": dict(sorted(kinds.items())),
         }

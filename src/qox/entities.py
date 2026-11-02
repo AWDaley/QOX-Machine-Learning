@@ -40,6 +40,7 @@ class Actor:
     milk: float = 0.0
     dung_pending: float = 0.0
     home_id: int | None = None
+    sheltered: bool = False
 
     @property
     def position(self) -> tuple[int, int]:

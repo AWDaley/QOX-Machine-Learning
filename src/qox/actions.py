@@ -18,6 +18,7 @@ class Kind(StrEnum):
     EAT = "eat"
     EAT_CARCASS = "eat_carcass"
     DEPOSIT = "deposit"
+    ENTER_REFUGE = "enter_refuge"
     REST = "rest"
     ATTACK = "attack"
 

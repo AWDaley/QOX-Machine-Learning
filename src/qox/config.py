@@ -25,6 +25,7 @@ class SimulationConfig:
     crop_growth: float = 0.55
     waste_decay: float = 0.12
     cow_metabolism: float = 0.045
+    refuge_ration: float = 0.02
 
     def __post_init__(self) -> None:
         if self.width < 8 or self.height < 8:
@@ -39,7 +40,7 @@ class SimulationConfig:
         for name in ("max_grass", "max_crop", "max_waste"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
-        for name in ("grass_growth", "crop_growth", "waste_decay", "cow_metabolism"):
+        for name in ("grass_growth", "crop_growth", "waste_decay", "cow_metabolism", "refuge_ration"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} cannot be negative")
 
