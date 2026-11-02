@@ -39,6 +39,34 @@ class CowController:
         return orders
 
 
+class RavagerController:
+    """Frozen M6 learned ravager; other populations remain scripted."""
+
+    def __init__(self, checkpoint: str | Path):
+        from .ravager_ppo import load_ravager
+        self.model = load_ravager(checkpoint)
+
+    def probabilities(self, world: World, actor_id: int) -> list[float]:
+        actor = world.actors[actor_id]
+        if actor.species != Species.RAVAGER:
+            raise ValueError("RavagerController only controls ravagers")
+        state = observe(world, actor)
+        with torch.no_grad():
+            distribution, _ = self.model(
+                torch.as_tensor(state["observation"]).unsqueeze(0),
+                torch.as_tensor(state["action_mask"]).unsqueeze(0))
+            return distribution.probs.squeeze(0).tolist()
+
+    def actions(self, world: World) -> dict:
+        orders = scripted_actions(world)
+        for actor in world.actors.values():
+            if actor.species == Species.RAVAGER:
+                probabilities = self.probabilities(world, actor.id)
+                choice = max(range(len(probabilities)), key=lambda index: probabilities[index])
+                orders[actor.id] = ACTIONS[Species.RAVAGER][choice]
+        return orders
+
+
 class FarmerController:
     """Frozen learned farmer policy; cows/nomads/others remain scripted."""
 

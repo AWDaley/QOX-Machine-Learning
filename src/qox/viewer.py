@@ -34,16 +34,18 @@ def display(config: SimulationConfig, mode: str = "scripted",
     clock = pygame.time.Clock()
     world = World(config)
     controller = None
-    if mode in ("learned-cow", "learned-farmer", "learned-nomad", "learned-herd"):
+    if mode in ("learned-cow", "learned-farmer", "learned-nomad", "learned-herd",
+                "learned-ravager"):
         if checkpoint is None:
             raise ValueError("--checkpoint is required for learned actor mode")
         from .learning.inference import (CowController, FarmerController,
-                                         NomadController, HerdController)
+                                         NomadController, HerdController, RavagerController)
         if mode == "learned-herd" and cow_checkpoint is None:
             raise ValueError("--cow-checkpoint required for learned-herd")
         controller = (CowController(checkpoint) if mode == "learned-cow"
                       else FarmerController(checkpoint) if mode == "learned-farmer"
                       else NomadController(checkpoint) if mode == "learned-nomad"
+                      else RavagerController(checkpoint) if mode == "learned-ravager"
                       else HerdController(checkpoint, cow_checkpoint))
     selected_id = None
     paused = False
@@ -82,6 +84,8 @@ def display(config: SimulationConfig, mode: str = "scripted",
                 color = (22, min(220, brightness), 29)
                 if t.planted:
                     color = (min(230, 105 + int(t.crop * 14)), 167, 42)
+                elif t.cover >= 0.5:
+                    color = (max(10, color[0] - 8), max(15, color[1] - 48), 55)
                 pygame.draw.rect(screen, color, (x * tile_px, y * tile_px, tile_px, tile_px))
                 if t.waste >= 0.4:
                     pygame.draw.circle(screen, (95, 65, 40),
@@ -113,6 +117,13 @@ def display(config: SimulationConfig, mode: str = "scripted",
             pygame.draw.circle(screen, COLORS[actor.species], (cx, cy), max(3, tile_px // 3))
             if actor.species == Species.COW:
                 pygame.draw.circle(screen, (30, 30, 30), (cx, cy), max(1, tile_px // 9))
+            if actor.species == Species.RAVAGER:
+                if actor.hibernating:
+                    pygame.draw.circle(screen, (90, 150, 240), (cx, cy), tile_px // 3, 2)
+                if actor.sneaking:
+                    pygame.draw.circle(screen, (60, 160, 80), (cx, cy), tile_px // 3, 2)
+                if actor.charge_windup:
+                    pygame.draw.circle(screen, (255, 180, 40), (cx, cy), tile_px // 2, 2)
         for settlement in world.settlements:
             count = world.refuge_occupants(settlement.id)
             if count:
@@ -131,9 +142,13 @@ def display(config: SimulationConfig, mode: str = "scripted",
                     f"energy:{selected.energy:.1f} hp:{selected.health:.1f} "
                     f"stamina:{selected.stamina:.1f}"
                     f" {'SHELTERED' if selected.sheltered else 'outside'}")
+            if selected.species == Species.RAVAGER:
+                info += (f" sat:{selected.satiety:.2f} "
+                         f"{'SLEEP' if selected.hibernating else 'SNEAK' if selected.sneaking else ''}")
             controlled = (Species.COW if mode == "learned-cow" else
                           Species.FARMER if mode == "learned-farmer" else
-                          Species.NOMAD if mode == "learned-nomad" else None)
+                          Species.NOMAD if mode == "learned-nomad" else
+                          Species.RAVAGER if mode == "learned-ravager" else None)
             is_controlled = (controller is not None and
                              (selected.species == controlled or
                               (mode == "learned-herd" and selected.species in

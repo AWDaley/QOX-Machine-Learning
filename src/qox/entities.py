@@ -43,6 +43,18 @@ class Actor:
     sheltered: bool = False
     friendly_cooldown: int = 0
     scary_cooldown: int = 0
+    # Ravager capabilities. These fields serialize with ordinary replay snapshots.
+    sneaking: bool = False
+    sneak_cooldown: int = 0
+    charge_dx: int = 0
+    charge_dy: int = 0
+    charge_windup: int = 0
+    charge_cooldown: int = 0
+    charge_recovery: int = 0
+    dragged_carcass_id: int | None = None
+    drag_cooldown: int = 0
+    hibernating: bool = False
+    satiety: float = 0.0
 
     @property
     def position(self) -> tuple[int, int]:
@@ -65,6 +77,7 @@ class Carcass:
     y: int
     meat: float
     origin_species: Species
+    carrier_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -16,7 +16,8 @@ def random_actions(world: World) -> dict[int, Action]:
         Species.NOMAD: (Kind.MILK, Kind.EAT, Kind.ATTACK,
                          Kind.FRIENDLY_CALL, Kind.SCARY_CALL),
         Species.SCAVENGER: (Kind.EAT, Kind.EAT_CARCASS),
-        Species.RAVAGER: (Kind.EAT_CARCASS,),
+        Species.RAVAGER: (Kind.EAT_CARCASS, Kind.GRAB_CARCASS,
+                          Kind.DROP_CARCASS, Kind.HIBERNATE, Kind.WAKE),
     }
     orders = {}
     for aid in sorted(world.actors):
@@ -104,10 +105,11 @@ def scripted_actions(world: World) -> dict[int, Action]:
                 target = _nearest(world, actor, lambda t: t.grass > 1 or t.crop > 1)
                 action = _toward(world, actor, target) if target else Action(Kind.REST)
         elif actor.species == Species.FARMER:
+            from .perception import _visible_actor
             home = next(s for s in world.settlements if s.id == actor.home_id)
             threats = [r for r in world.actors.values()
                        if r.species == Species.RAVAGER and not r.sheltered
-                       and abs(r.x - actor.x) + abs(r.y - actor.y) <= 4]
+                       and _visible_actor(world, actor, r)]
             if actor.sheltered:
                 if actor.energy < 40 and world._nearby_settlement(actor):
                     action = Action(Kind.EAT)
@@ -139,13 +141,14 @@ def scripted_actions(world: World) -> dict[int, Action]:
                 target = _nearest(world, actor, lambda t: t.crop >= 1.5 or t.waste >= 0.6)
                 action = _toward(world, actor, target) if target else Action(Kind.REST)
         elif actor.species == Species.NOMAD:
+            from .perception import _visible_actor
             visible_cows = sorted((c for c in world.actors.values()
                                    if c.species == Species.COW
                                    and abs(c.x - actor.x) + abs(c.y - actor.y) <= 5),
                                   key=lambda c: c.id)
             nearby_ravagers = sorted((r for r in world.actors.values()
                                       if r.species == Species.RAVAGER
-                                      and abs(r.x - actor.x) + abs(r.y - actor.y) <= 5),
+                                      and _visible_actor(world, actor, r)),
                                      key=lambda r: (abs(r.x - actor.x) + abs(r.y - actor.y), r.id))
             if nearby_ravagers and any(abs(c.x - nearby_ravagers[0].x)
                                        + abs(c.y - nearby_ravagers[0].y) <= 3
@@ -196,26 +199,68 @@ def scripted_actions(world: World) -> dict[int, Action]:
                 target = _nearest(world, actor, lambda t: t.waste >= 0.4)
                 action = _toward(world, actor, target) if target else Action(Kind.REST)
         else:
-            # Minimal contact-bite predator for M3 threat scenarios. The full
-            # sneak/charge/drag/hibernate behavior is reserved for M6.
+            # Interpretable M6 predator reference. This is a heuristic baseline,
+            # not a hidden behavior imposed on neural-network-controlled actors.
             prey = sorted((a for a in world.actors.values()
                            if a.id != actor.id and a.species != Species.RAVAGER
                            and not a.sheltered
                            and abs(a.x - actor.x) + abs(a.y - actor.y) <= 6),
                           key=lambda a: (abs(a.x - actor.x) + abs(a.y - actor.y), a.id))
             nearby = [a for a in prey if abs(a.x - actor.x) + abs(a.y - actor.y) <= 1]
-            has_carcass = any(c.x == actor.x and c.y == actor.y
+            has_carcass = any(c.x == actor.x and c.y == actor.y and
+                              c.carrier_id in (None, actor.id)
                               for c in world.carcasses.values())
-            if has_carcass:
+            local_carcass = sorted((c for c in world.carcasses.values()
+                                    if c.carrier_id is None),
+                                   key=lambda c: (abs(c.x - actor.x) + abs(c.y - actor.y), c.id))
+            if actor.hibernating:
+                action = (Action(Kind.WAKE) if actor.energy < 40 or actor.satiety < 0.1
+                          else Action(Kind.WAIT))
+            elif actor.charge_recovery or actor.charge_windup:
+                action = Action(Kind.WAIT)
+            elif (actor.dragged_carcass_id is not None and tile.cover < 0.5):
+                protected = _nearest(world, actor, lambda t: t.cover >= 0.5, radius=5)
+                if actor.drag_cooldown:
+                    action = Action(Kind.WAIT)
+                else:
+                    action = (_toward(world, actor, protected) if protected
+                              else Action(Kind.DROP_CARCASS))
+            elif actor.dragged_carcass_id is not None and tile.cover >= 0.5:
+                action = (Action(Kind.EAT_CARCASS) if has_carcass
+                          else Action(Kind.DROP_CARCASS))
+            elif has_carcass and tile.cover >= 0.5:
                 action = Action(Kind.EAT_CARCASS)
+            elif has_carcass and actor.satiety < 0.35 and actor.energy < 25:
+                action = Action(Kind.EAT_CARCASS)
+            elif local_carcass and (abs(local_carcass[0].x - actor.x) +
+                                    abs(local_carcass[0].y - actor.y) <= 1):
+                action = Action(Kind.GRAB_CARCASS)
+            elif local_carcass and (abs(local_carcass[0].x - actor.x) +
+                                    abs(local_carcass[0].y - actor.y) <= 3):
+                action = _toward(world, actor,
+                                 (local_carcass[0].x, local_carcass[0].y))
             elif nearby and actor.stamina >= 4.0:
                 action = Action(Kind.ATTACK)
+            elif (prey and abs(prey[0].x - actor.x) + abs(prey[0].y - actor.y)
+                  in (2, 3) and (prey[0].x == actor.x or prey[0].y == actor.y)
+                  and actor.charge_cooldown == 0
+                  and actor.stamina >= world.config.ravager_charge_stamina):
+                target = prey[0]
+                dx = 0 if target.x == actor.x else 1 if target.x > actor.x else -1
+                dy = 0 if target.y == actor.y else 1 if target.y > actor.y else -1
+                action = Action(Kind.CHARGE, dx, dy)
+            elif actor.satiety >= 0.4 and actor.energy >= 65 and not prey:
+                action = Action(Kind.HIBERNATE)
             elif prey:
-                action = _toward(world, actor, prey[0].position)
+                step = _toward(world, actor, prey[0].position)
+                action = (Action(Kind.SNEAK, step.dx, step.dy)
+                          if step.kind == Kind.MOVE and actor.sneak_cooldown == 0
+                          and actor.stamina >= world.config.ravager_sneak_stamina
+                          and tile.cover >= 0.5 else step)
             else:
-                carcasses = sorted(world.carcasses.values(),
-                                   key=lambda c: (abs(c.x - actor.x) + abs(c.y - actor.y), c.id))
-                action = _toward(world, actor, (carcasses[0].x, carcasses[0].y)) if carcasses else Action(Kind.REST)
+                action = (_toward(world, actor, (local_carcass[0].x,
+                                                local_carcass[0].y)) if local_carcass
+                          else Action(Kind.REST))
         orders[aid] = action
     return orders
 

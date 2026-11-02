@@ -33,7 +33,7 @@ class QoxCoreEnv:
                  nomad_v2: bool = False):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal", "nomad_signal"):
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed"):
             raise ValueError(f"Unknown scenario: {scenario}")
         if config is None:
             if scenario == "forage":
@@ -64,6 +64,14 @@ class QoxCoreEnv:
             elif scenario == "refuge":
                 config = SimulationConfig(width=12, height=12, farmers=1, cows=0,
                                           nomads=0, scavengers=0, ravagers=1)
+            elif scenario in ("ravager_ambush", "ravager_carcass", "ravager_hibernate",
+                              "ravager_mixed"):
+                config = SimulationConfig(width=20, height=14, farmers=0,
+                                          cows=1 if scenario in ("ravager_ambush", "ravager_mixed")
+                                          else 0,
+                                          nomads=2 if scenario == "ravager_carcass" else 0,
+                                          scavengers=0, ravagers=1,
+                                          grass_growth=0.10)
             else:
                 config = SimulationConfig()
         if scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
@@ -107,6 +115,8 @@ class QoxCoreEnv:
             refuge_episode = seed % 3 == 1
             config = replace(config, cows=0 if refuge_episode else 1,
                              ravagers=1 if refuge_episode else 0)
+        if self.scenario == "ravager_mixed":
+            config = replace(config, cows=int(seed % 3 == 0), nomads=2 * int(seed % 3 == 1))
         self.world = World(replace(config, seed=seed))
         if self.scenario != "natural":
             self._scenario_setup(seed)
@@ -126,6 +136,9 @@ class QoxCoreEnv:
         rng = random.Random(seed ^ 0x45AB90)
         if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
             self._nomad_scenario(rng, seed)
+            return
+        if self.scenario.startswith("ravager_"):
+            self._ravager_scenario(rng, seed)
             return
         if self.scenario == "cow_signal":
             self._cow_signal_scenario(rng)
@@ -163,6 +176,52 @@ class QoxCoreEnv:
                           if (x, y) not in occupied and (x, y) not in entrances]
                 if places:
                     predator.x, predator.y = rng.choice(places)
+        self.world.check_invariants()
+
+    def _ravager_scenario(self, rng: random.Random, seed: int) -> None:
+        """Seed-controlled hunting, drag-to-cover and hibernation curricula.
+
+        The den is just a high-cover region; it is not a hidden waypoint or a
+        teleport destination. Reward comes from consumed food and staying safe.
+        """
+        from ..entities import Carcass
+
+        mode = ("ravager_ambush", "ravager_carcass", "ravager_hibernate")[seed % 3] \
+            if self.scenario == "ravager_mixed" else self.scenario
+        self.ravager_episode_mode = mode
+        ravager = next(a for a in self.world.actors.values()
+                       if a.species == Species.RAVAGER)
+        ravager.x, ravager.y = 7, 7
+        ravager.energy, ravager.stamina = 50.0, 100.0
+        for tile in self.world.grid.tiles:
+            tile.planted, tile.crop, tile.waste = False, 0.0, 0.0
+            tile.grass, tile.fertility, tile.cover = 0.04, 0.4, 0.0
+        # Create cover patches large enough to detect in local perception.
+        for x in range(3, 6):
+            for y in range(6, 9):
+                self.world.grid.get(x, y).cover = 0.85
+        if mode == "ravager_ambush":
+            cow = next(a for a in self.world.actors.values()
+                       if a.species == Species.COW)
+            cow.x, cow.y = 11, 7 + (seed % 3 - 1)
+            cow.health = 55
+            cow.energy = 60
+            self.world.grid.get(*cow.position).grass = 8.0
+            self.world.grid.get(*cow.position).fertility = 0.85
+            # Starting cover allows sneaking; open land near the cow remains visible.
+            self.world.grid.get(*ravager.position).cover = 0.8
+        elif mode == "ravager_carcass":
+            cid = self.world.next_carcass_id
+            self.world.carcasses[cid] = Carcass(cid, 9, 7, 12.0, Species.COW)
+            self.world.next_carcass_id += 1
+            defenders = [a for a in self.world.actors.values()
+                         if a.species == Species.NOMAD]
+            for defender, (x, y) in zip(defenders, ((10, 7), (9, 8)), strict=True):
+                defender.x, defender.y = x, y
+                defender.stamina = 100.0
+        else:
+            ravager.energy, ravager.satiety = 92, 0.85
+            ravager.x, ravager.y = 4, 7
         self.world.check_invariants()
 
     def _nomad_scenario(self, rng: random.Random, seed: int) -> None:
@@ -367,6 +426,28 @@ class QoxCoreEnv:
                       for name in previous}
         old_cows = {aid: (a.position, a.health)
                     for aid, a in self.world.actors.items() if a.species == Species.COW}
+        # Optional, very small potential-based pursuit shaping for the ravager
+        # curriculum. Targets must be locally perceptible, not omniscient.
+        ravager_target_distances: dict[int, tuple[tuple[int, int], str, int]] = {}
+        if self.scenario.startswith("ravager_"):
+            from ..perception import _visible_actor
+            for hunter in self.world.actors.values():
+                if hunter.species != Species.RAVAGER:
+                    continue
+                prey = sorted((other for other in self.world.actors.values()
+                               if other.species != Species.RAVAGER and not other.sheltered
+                               and _visible_actor(self.world, hunter, other)),
+                              key=lambda o: (abs(o.x - hunter.x) + abs(o.y - hunter.y), o.id))
+                near_carcass = sorted((carcass for carcass in self.world.carcasses.values()
+                                      if carcass.carrier_id is None and
+                                      abs(carcass.x - hunter.x) +
+                                      abs(carcass.y - hunter.y) <= 7),
+                                     key=lambda c: (abs(c.x - hunter.x) +
+                                                     abs(c.y - hunter.y), c.id))
+                target = prey[0] if prey else near_carcass[0] if near_carcass else None
+                if target is not None:
+                    kind = "actor" if prey else "carcass"
+                    ravager_target_distances[hunter.id] = (hunter.position, kind, target.id)
         goal = self.world.herd_goal
         old_goal_distances = {aid: abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
                               for aid, (pos, _) in old_cows.items()} if goal else {}
@@ -385,6 +466,17 @@ class QoxCoreEnv:
                                     ACTIONS[actor.species][choice])
             elif self.scripted_others:
                 chosen = scripted[actor.id]
+                if (self.scenario.startswith("ravager_")
+                        and getattr(self, "ravager_episode_mode", None) ==
+                        "ravager_carcass" and actor.species == Species.NOMAD):
+                    # Scenario-only sentry: contests food within melee reach,
+                    # but doesn't chase a retreating carcass carrier. This
+                    # supplies a reason to relocate a kill without commanding
+                    # the ravager to drag it.
+                    close = any(other.species == Species.RAVAGER and
+                                abs(other.x - actor.x) + abs(other.y - actor.y) <= 1
+                                for other in self.world.actors.values())
+                    chosen = Action(Kind.ATTACK if close else Kind.WAIT)
                 if self.scenario == "cow_signal" and actor.species == Species.NOMAD:
                     kind = (Kind.SCARY_CALL if self.signal_kind == Kind.FRIENDLY_CALL
                             else Kind.FRIENDLY_CALL) if self.flip_signal else self.signal_kind
@@ -409,6 +501,20 @@ class QoxCoreEnv:
         components: dict[str, dict[str, float]] = {name: defaultdict(float)
                                                         for name in previous}
         id_to_name = {aid: name for name, aid in self.name_to_id.items()}
+        for aid, (old_pos, kind, target_id) in ravager_target_distances.items():
+            actor = self.world.actors.get(aid)
+            target = (self.world.actors.get(target_id) if kind == "actor"
+                      else self.world.carcasses.get(target_id))
+            name = id_to_name.get(aid)
+            if actor is None or target is None or name not in rewards:
+                continue
+            # Signed distance improvement: backtracking costs what approach
+            # gains; the action itself receives no arbitrary bonus.
+            old_distance = abs(old_pos[0] - target.x) + abs(old_pos[1] - target.y)
+            new_distance = abs(actor.x - target.x) + abs(actor.y - target.y)
+            difference = 0.08 * (old_distance - new_distance)
+            rewards[name] += difference
+            components[name]["foraging_progress"] += difference
         for event in self.world.last_events:
             name = id_to_name.get(event.actor_id)
             if name not in rewards:
@@ -425,7 +531,10 @@ class QoxCoreEnv:
                 # This is weak shaping; harvest/food-storage outcomes dominate.
                 value = 0.025 * event.amount
             elif event.kind in ("eat_waste", "eat_carcass", "milk"):
-                value = 0.15 * event.amount
+                value = (0.50 if name.startswith("ravager_") and
+                         event.kind == "eat_carcass" else 0.15) * event.amount
+            elif event.kind == "charge_hit" and name.startswith("ravager_"):
+                value = 0.012 * event.amount
             elif event.kind == "deposit":
                 value = 0.55 * event.amount
             else:
@@ -509,6 +618,18 @@ class QoxCoreEnv:
                                max(1, len(old_cows)))
                 rewards[name] += value
                 components[name]["herd_condition_at_end"] += value
+            if (truncations[name] and name.startswith("ravager_")
+                    and self.scenario.startswith("ravager_") and actor is not None):
+                # In the satiated episode, conservation of *actual* energy is
+                # the outcome. No reward is paid for simply pressing hibernate.
+                if self.ravager_episode_mode == "ravager_hibernate":
+                    value = (actor.energy - 75.0) / 10.0
+                    rewards[name] += value
+                    components[name]["final_energy"] += value
+                else:
+                    value = 0.025 * (actor.energy - 50.0)
+                    rewards[name] += value
+                    components[name]["final_energy"] += value
         self.agents = [name for name in previous if not (terminations[name]
                                                          or truncations[name])]
         infos = {name: {"invalid_action": invalid.get(name, False),

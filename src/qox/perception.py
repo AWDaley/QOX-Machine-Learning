@@ -58,6 +58,14 @@ NOMAD_FEATURES = (
     "nearby_cows_at_risk", "nearby_nomads", "friendly_ready", "scary_ready",
     "nearby_milk_available", "nearby_ravager_threat",
 )
+RAVAGER_OBSERVATION_VERSION = 2
+RAVAGER_FEATURES = (
+    "satiety", "sneaking", "sneak_ready", "charge_ready", "charge_windup",
+    "charge_recovery", "dragging", "drag_ready", "hibernating",
+    "prey_visible", "prey_dx", "prey_dy", "prey_health", "prey_distance",
+    "nearby_defenders", "cover_seen", "cover_dx", "cover_dy", "cover_amount",
+    "carcass_scent_dx", "carcass_scent_dy", "carcass_scent_strength",
+)
 
 
 def features_for(species: Species, *, cow_calls: bool = False,
@@ -69,6 +77,8 @@ def features_for(species: Species, *, cow_calls: bool = False,
                 (NOMAD_RELATIONAL_FEATURES if nomad_v2 else ()))
     if species == Species.COW and cow_calls:
         return FEATURES + COW_CALL_FEATURES
+    if species == Species.RAVAGER:
+        return FEATURES + RAVAGER_FEATURES
     return FEATURES
 
 
@@ -90,7 +100,11 @@ ACTIONS: dict[Species, tuple[Action, ...]] = {
                              Kind.SCARY_CALL, Kind.ATTACK) +
                     tuple(Action(Kind.DASH, *delta) for delta in DIRECTIONS)),
     Species.SCAVENGER: _catalog(Kind.EAT, Kind.EAT_CARCASS),
-    Species.RAVAGER: _catalog(Kind.EAT_CARCASS, Kind.ATTACK),
+    Species.RAVAGER: (_catalog(Kind.EAT_CARCASS, Kind.ATTACK,
+                               Kind.GRAB_CARCASS, Kind.DROP_CARCASS,
+                               Kind.HIBERNATE, Kind.WAKE)
+                      + tuple(Action(Kind.SNEAK, *delta) for delta in DIRECTIONS)
+                      + tuple(Action(Kind.CHARGE, *delta) for delta in DIRECTIONS)),
 }
 
 
@@ -125,6 +139,18 @@ def _visible(world: World, observer: Actor, x: int, y: int) -> bool:
             and _los(world, observer.x, observer.y, x, y))
 
 
+def _visible_actor(world: World, observer: Actor, target: Actor) -> bool:
+    if not _visible(world, observer, target.x, target.y):
+        return False
+    if not target.sneaking or target.species != Species.RAVAGER:
+        return True
+    distance = abs(target.x - observer.x) + abs(target.y - observer.y)
+    if distance <= 1:
+        return True  # Sneaking never hides a predator at touching distance.
+    cover = world.grid.get(target.x, target.y).cover
+    return not (cover >= 0.5 or (cover >= 0.2 and distance >= 4))
+
+
 def _direction(observer: Actor, x: int, y: int) -> tuple[float, float, float]:
     dx, dy = x - observer.x, y - observer.y
     return (max(-1.0, min(1.0, dx / VISION_RADIUS)),
@@ -135,7 +161,7 @@ def _direction(observer: Actor, x: int, y: int) -> tuple[float, float, float]:
 def _nearest_actor(world: World, observer: Actor, species: Species):
     matches = [other for other in world.actors.values()
                if other.id != observer.id and other.species == species
-               and _visible(world, observer, other.x, other.y)]
+               and _visible_actor(world, observer, other)]
     return min(matches, key=lambda a: (abs(a.x - observer.x) + abs(a.y - observer.y),
                                        a.id), default=None)
 
@@ -181,15 +207,31 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
     for action in ACTIONS[actor.species]:
         kind = action.kind
         valid = True
+        if actor.hibernating:
+            mask.append(int(kind in (Kind.WAIT, Kind.WAKE)))
+            continue
+        if actor.charge_windup:
+            mask.append(int(kind == Kind.WAIT))
+            continue
+        if actor.charge_recovery:
+            mask.append(int(kind in (Kind.WAIT, Kind.REST)))
+            continue
         if actor.sheltered and kind not in (Kind.WAIT, Kind.MOVE, Kind.REST, Kind.EAT, Kind.DEPOSIT):
             mask.append(0)
             continue
-        if kind in (Kind.MOVE, Kind.DASH):
+        if kind in (Kind.MOVE, Kind.DASH, Kind.SNEAK):
             is_dash = kind == Kind.DASH
+            is_sneak = kind == Kind.SNEAK
             distance = 2 if is_dash else 1
-            cost = world.config.nomad_dash_stamina if is_dash else 0.5
+            cost = (world.config.nomad_dash_stamina if is_dash else
+                    world.config.ravager_sneak_stamina if is_sneak else 0.5)
+            if actor.dragged_carcass_id is not None:
+                cost += world.config.ravager_drag_stamina
             x, y = actor.x + distance * action.dx, actor.y + distance * action.dy
             valid = ((not is_dash or actor.species == Species.NOMAD)
+                     and (not is_sneak or actor.species == Species.RAVAGER
+                          and actor.sneak_cooldown == 0)
+                     and (actor.dragged_carcass_id is None or actor.drag_cooldown == 0)
                      and actor.stamina >= cost and world.grid.contains(x, y)
                      and world.grid.get(x, y).passable
                      and not any((s.x, s.y) == (x, y) for s in world.settlements))
@@ -227,7 +269,32 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
             else:
                 valid = tile.waste > 0
         elif kind == Kind.EAT_CARCASS:
-            valid = any(c.x == actor.x and c.y == actor.y for c in world.carcasses.values())
+            valid = any(c.x == actor.x and c.y == actor.y
+                        and c.carrier_id in (None, actor.id)
+                        for c in world.carcasses.values())
+        elif kind == Kind.GRAB_CARCASS:
+            valid = (actor.species == Species.RAVAGER
+                     and actor.dragged_carcass_id is None
+                     and any(c.carrier_id is None
+                             and abs(c.x - actor.x) + abs(c.y - actor.y) <= 1
+                             for c in world.carcasses.values()))
+        elif kind == Kind.DROP_CARCASS:
+            valid = actor.species == Species.RAVAGER and actor.dragged_carcass_id is not None
+        elif kind == Kind.CHARGE:
+            x, y = actor.x + action.dx, actor.y + action.dy
+            valid = (actor.species == Species.RAVAGER
+                     and actor.charge_cooldown == 0
+                     and actor.dragged_carcass_id is None
+                     and actor.stamina >= world.config.ravager_charge_stamina
+                     and actor.energy >= world.config.ravager_charge_energy
+                     and world.grid.contains(x, y)
+                     and world.grid.get(x, y).passable
+                     and not any((s.x, s.y) == (x, y) for s in world.settlements))
+        elif kind == Kind.HIBERNATE:
+            valid = (actor.species == Species.RAVAGER
+                     and actor.satiety >= 0.4 and actor.energy >= 35)
+        elif kind == Kind.WAKE:
+            valid = False
         elif kind == Kind.DEPOSIT:
             valid = actor.carried_food > 0 and world._nearby_settlement(actor) is not None
         elif kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
@@ -319,7 +386,7 @@ def observe(world: World, actor: Actor, *, cow_calls: bool = False,
 
     for species in (Species.COW, Species.RAVAGER):
         visible = sum(a.id != actor.id and a.species == species
-                      and _visible(world, actor, a.x, a.y)
+                      and _visible_actor(world, actor, a)
                       for a in world.actors.values())
         values.append(min(1, visible / 8))
 
@@ -345,7 +412,8 @@ def observe(world: World, actor: Actor, *, cow_calls: bool = False,
     # Recent physically generated noise, based on last-tick events only.
     noises = []
     for event in world.last_events:
-        if event.kind not in ("move", "attack", "death"):
+        if event.kind not in ("move", "attack", "death", "charge_windup",
+                             "charge_resolved"):
             continue
         if event.x is not None and event.y is not None and event.actor_id != actor.id:
             distance = abs(event.x - actor.x) + abs(event.y - actor.y)
@@ -415,7 +483,7 @@ def observe(world: World, actor: Actor, *, cow_calls: bool = False,
             goal_x, goal_y = 0.0, 0.0
         ravagers = [enemy for enemy in world.actors.values()
                     if enemy.species == Species.RAVAGER
-                    and _visible(world, actor, enemy.x, enemy.y)]
+                    and _visible_actor(world, actor, enemy)]
         threatened = sum(any(abs(c.x - r.x) + abs(c.y - r.y) <= 2
                              for r in ravagers) for c in visible_cows)
         nearby_nomads = sum(a.id != actor.id and a.species == Species.NOMAD
@@ -452,6 +520,57 @@ def observe(world: World, actor: Actor, *, cow_calls: bool = False,
                 values.extend((0.0, 0.0, 0.0))
     elif actor.species == Species.COW and cow_calls:
         values.extend(call_features(world, actor))
+    if actor.species == Species.RAVAGER:
+        prey = [other for other in world.actors.values()
+                if other.id != actor.id and other.species != Species.RAVAGER
+                and not other.sheltered and _visible_actor(world, actor, other)]
+        nearest_prey = min(prey, key=lambda other: (
+            abs(other.x - actor.x) + abs(other.y - actor.y), other.id), default=None)
+        if nearest_prey is not None:
+            prey_dx, prey_dy, prey_dist = _direction(actor, *nearest_prey.position)
+            prey_info = [1, prey_dx, prey_dy, nearest_prey.health / 100, prey_dist]
+        else:
+            prey_info = [0, 0, 0, 0, 0]
+        defenders = sum(other.species == Species.NOMAD
+                        and _visible_actor(world, actor, other)
+                        for other in world.actors.values())
+        covered = []
+        for y in range(max(0, actor.y - VISION_RADIUS),
+                       min(world.grid.height, actor.y + VISION_RADIUS + 1)):
+            for x in range(max(0, actor.x - VISION_RADIUS),
+                           min(world.grid.width, actor.x + VISION_RADIUS + 1)):
+                if _visible(world, actor, x, y) and world.grid.get(x, y).cover >= 0.5:
+                    covered.append((-world.grid.get(x, y).cover,
+                                    abs(x - actor.x) + abs(y - actor.y), y, x))
+        if covered:
+            strength, _, cy, cx = min(covered)
+            cover_dx, cover_dy, _ = _direction(actor, cx, cy)
+            cover_info = [1, cover_dx, cover_dy, -strength]
+        else:
+            cover_info = [0, 0, 0, 0]
+        scent_x = scent_y = scent_strength = 0.0
+        for carcass in world.carcasses.values():
+            distance = abs(carcass.x - actor.x) + abs(carcass.y - actor.y)
+            if distance <= 7:
+                strength = carcass.meat / (1 + distance) ** 2
+                scent_x += strength * (carcass.x - actor.x)
+                scent_y += strength * (carcass.y - actor.y)
+                scent_strength += strength
+        scent_info = ([max(-1, min(1, scent_x / scent_strength / 7)),
+                       max(-1, min(1, scent_y / scent_strength / 7)),
+                       min(1, scent_strength / 12)] if scent_strength > 1e-8
+                      else [0, 0, 0])
+        values.extend([
+            actor.satiety, float(actor.sneaking),
+            float(actor.sneak_cooldown == 0),
+            float(actor.charge_cooldown == 0 and
+                  actor.stamina >= world.config.ravager_charge_stamina),
+            float(actor.charge_windup > 0),
+            min(1, actor.charge_recovery / 3),
+            float(actor.dragged_carcass_id is not None),
+            float(actor.drag_cooldown == 0), float(actor.hibernating),
+            *prey_info, min(1, defenders / 4), *cover_info, *scent_info,
+        ])
     result = np.asarray(values, dtype=np.float32)
     expected = observation_size(actor.species, cow_calls=cow_calls, nomad_v2=nomad_v2)
     if result.shape != (expected,):
