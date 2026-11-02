@@ -1,6 +1,6 @@
 # QOX Machine Learning
 
-**Current status: M0–M6 implemented (deterministic ecosystem, local perception, cow/farmer PPO, learned-herd experiments, and ravager hunting mechanics/training).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
+**Current status: M0–M7 implemented (deterministic ecosystem, species-specific PPO, learned-herd experiments, ravager intelligence, and scavenger nutrient competition).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
 
 ## Quick start
 
@@ -104,7 +104,7 @@ See [the controlled call curriculum and paired counterfactual results](docs/M5_S
 
 ## Not yet implemented
 
-Scavengers **do not have learned policies yet**. M7–M9 will address advanced scavenger nutrient competition, solo/combined festivals and reproduction. M6 ravager learning is **partial**: charge hunting and satiated hibernation show measurable progress in isolated tasks, but safe carcass relocation and stealth are not yet reliably learned. M5's neural cattle have demonstrated **limited call sensitivity in a controlled task**, but not reliable full-herd communication; and neural nomads have not mastered herding or defense; the effective scripted counterparts are reference policies, not scientific evidence of emergence. The simulation has not demonstrated long-run stable ecology.
+Scavengers now have learned PPO policies and nutrient-recycling rules (M7); M8–M9 will address solo/combined festivals and reproduction. M6 ravager learning is **partial**: charge hunting and satiated hibernation show measurable progress in isolated tasks, but safe carcass relocation and stealth are not yet reliably learned. M5's neural cattle have demonstrated **limited call sensitivity in a controlled task**, but not reliable full-herd communication; and neural nomads have not mastered herding or defense; the effective scripted counterparts are reference policies, not scientific evidence of emergence. The simulation has not demonstrated long-run stable ecology.
 
 ## Documents
 
@@ -114,6 +114,20 @@ Scavengers **do not have learned policies yet**. M7–M9 will address advanced s
 - [M5 nomad communication, cow-v2 policies and honest benchmarks](docs/M5_NOMADS_COMMUNICATION.md)
 - [M5 controlled two-signal curriculum and counterfactual tests](docs/M5_SIGNAL_CURRICULUM.md)
 - [M6 ravager physics, PPO, test results and remaining gaps](docs/M6_RAVAGER_INTELLIGENCE.md)
+- [M7 scavenger nutrient recycling and held-out benchmarks](docs/M7_SCAVENGER_ECOLOGY.md)
+
+
+## M7: Learned scavenging and manure competition
+
+Scavengers now receive **71 local neural inputs**, including carrion scent, visible waste and nearby competitors. They consume finite waste and carcass meat, return only a fraction of consumed organic matter to soil through digestion, and compete with farmers who need manure to fertilize. Passive carcass decay also returns nutrients. No rule teleports food or forces scavenger movement. Existing species checkpoints are unchanged.
+
+```powershell
+qox train-scavenger --scenario scavenger_mixed --steps 8192 --output runs/scavenger.pt
+qox benchmark-scavenger --scenario scavenger_competition --checkpoint runs/scavenger.pt --episodes 48 --report runs/scavenger-benchmark.json
+qox viewer --mode learned-scavenger --checkpoint runs/scavenger.pt
+```
+
+In a held-out 48-episode evaluation, the selected two-stage policy consumed **5.608 waste units** versus 0.169 for random movement in the waste scenario, **8.247 carrion units** versus 0.333 for random in the carcass scenario, and **7.784 waste units** versus 0.068 for random during farmer competition (greedy evaluation). Farmers collected less manure when the trained scavenger consumed more, demonstrating a real tradeoff. A scripted scavenger remained stronger on reliable carrion consumption. These are short scenario results, not a proven stable long-term ecosystem. See [M7 research report](docs/M7_SCAVENGER_ECOLOGY.md).
 
 ## Scientific reproducibility
 

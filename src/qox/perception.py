@@ -58,6 +58,13 @@ NOMAD_FEATURES = (
     "nearby_cows_at_risk", "nearby_nomads", "friendly_ready", "scary_ready",
     "nearby_milk_available", "nearby_ravager_threat",
 )
+SCAVENGER_OBSERVATION_VERSION = 2
+SCAVENGER_FEATURES = (
+    "carcass_here", "carcass_scent_dx", "carcass_scent_dy",
+    "carcass_scent_power", "waste_patch_seen", "waste_patch_dx",
+    "waste_patch_dy", "waste_patch_amount", "visible_farmer_competitors",
+    "visible_scavenger_competitors", "visible_ravager_threat",
+)
 RAVAGER_OBSERVATION_VERSION = 2
 RAVAGER_FEATURES = (
     "satiety", "sneaking", "sneak_ready", "charge_ready", "charge_windup",
@@ -79,6 +86,8 @@ def features_for(species: Species, *, cow_calls: bool = False,
         return FEATURES + COW_CALL_FEATURES
     if species == Species.RAVAGER:
         return FEATURES + RAVAGER_FEATURES
+    if species == Species.SCAVENGER:
+        return FEATURES + SCAVENGER_FEATURES
     return FEATURES
 
 
@@ -520,6 +529,47 @@ def observe(world: World, actor: Actor, *, cow_calls: bool = False,
                 values.extend((0.0, 0.0, 0.0))
     elif actor.species == Species.COW and cow_calls:
         values.extend(call_features(world, actor))
+    if actor.species == Species.SCAVENGER:
+        # Only unclaimed carrion can be smelled/eaten by scavengers; dragged
+        # carcasses remain exclusive to their carrier until dropped.
+        carrion = [c for c in world.carcasses.values() if c.carrier_id is None]
+        here = any(c.x == actor.x and c.y == actor.y for c in carrion)
+        odor_x = odor_y = odor_power = 0.0
+        for carcass in carrion:
+            dist = abs(carcass.x - actor.x) + abs(carcass.y - actor.y)
+            if dist <= 7:
+                strength = carcass.meat / (1 + dist) ** 2
+                odor_x += strength * (carcass.x - actor.x)
+                odor_y += strength * (carcass.y - actor.y)
+                odor_power += strength
+        if odor_power:
+            odor_dx = max(-1.0, min(1.0, odor_x / odor_power / 7))
+            odor_dy = max(-1.0, min(1.0, odor_y / odor_power / 7))
+        else:
+            odor_dx = odor_dy = 0.0
+        waste_patches = []
+        for y in range(max(0, actor.y - VISION_RADIUS),
+                       min(world.grid.height, actor.y + VISION_RADIUS + 1)):
+            for x in range(max(0, actor.x - VISION_RADIUS),
+                           min(world.grid.width, actor.x + VISION_RADIUS + 1)):
+                if _visible(world, actor, x, y) and world.grid.get(x, y).waste >= 0.05:
+                    waste_patches.append((abs(x - actor.x) + abs(y - actor.y), y, x))
+        if waste_patches:
+            _, y, x = min(waste_patches)
+            wdx, wdy, _ = _direction(actor, x, y)
+            wseen, wamount = 1.0, min(1.0, world.grid.get(x, y).waste /
+                                           world.config.max_waste)
+        else:
+            wseen = wdx = wdy = wamount = 0.0
+        competitors = {species: sum(a.id != actor.id and a.species == species
+                                    and _visible_actor(world, actor, a)
+                                    for a in world.actors.values())
+                       for species in (Species.FARMER, Species.SCAVENGER, Species.RAVAGER)}
+        values.extend((float(here), odor_dx, odor_dy, min(1.0, odor_power / 12),
+                       wseen, wdx, wdy, wamount,
+                       min(1.0, competitors[Species.FARMER] / 4),
+                       min(1.0, competitors[Species.SCAVENGER] / 4),
+                       min(1.0, competitors[Species.RAVAGER] / 4)))
     if actor.species == Species.RAVAGER:
         prey = [other for other in world.actors.values()
                 if other.id != actor.id and other.species != Species.RAVAGER

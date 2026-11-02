@@ -44,6 +44,9 @@ class SimulationConfig:
     ravager_charge_recovery: int = 2
     ravager_drag_stamina: float = 2.5
     ravager_hibernate_metabolism: float = 0.012
+    # M7: digestion leaves only a fraction of scavenged matter as recyclable residue.
+    scavenger_residue_fraction: float = 0.12
+    carcass_fertility_return: float = 0.015
 
     def __post_init__(self) -> None:
         if self.width < 8 or self.height < 8:
@@ -62,6 +65,10 @@ class SimulationConfig:
         if min(self.ravager_charge_distance, self.ravager_charge_cooldown,
                self.ravager_charge_recovery) < 1:
             raise ValueError("Ravager charge limits must be positive")
+        if not 0 <= self.scavenger_residue_fraction < 1:
+            raise ValueError("Scavenger residue fraction must be between 0 and 1")
+        if self.carcass_fertility_return < 0:
+            raise ValueError("Carcass nutrient return cannot be negative")
         if self.ecology_interval < 1:
             raise ValueError("ecology_interval must be positive")
         for name in ("farmers", "cows", "nomads", "scavengers", "ravagers"):

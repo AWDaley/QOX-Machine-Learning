@@ -17,7 +17,7 @@ def parser() -> argparse.ArgumentParser:
     simulate.add_argument("--ticks", type=int, default=200)
     simulate.add_argument("--seed", type=int)
     simulate.add_argument("--config", type=Path)
-    simulate.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd", "learned-ravager"), default="scripted")
+    simulate.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd", "learned-ravager", "learned-scavenger"), default="scripted")
     simulate.add_argument("--report", type=Path)
     simulate.add_argument("--trace", type=Path)
     simulate.add_argument("--checkpoint", type=Path)
@@ -28,7 +28,7 @@ def parser() -> argparse.ArgumentParser:
     view = sub.add_parser("viewer", help="View the world in Pygame (optional extra)")
     view.add_argument("--seed", type=int, default=42)
     view.add_argument("--config", type=Path)
-    view.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd", "learned-ravager"), default="scripted")
+    view.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd", "learned-ravager", "learned-scavenger"), default="scripted")
     view.add_argument("--checkpoint", type=Path)
     view.add_argument("--cow-checkpoint", type=Path,
                       help="Second checkpoint for learned-herd mode")
@@ -147,6 +147,30 @@ def parser() -> argparse.ArgumentParser:
                                             "scripted", "policy_nocharge", "policy_nosneak",
                                             "policy_nohibernate"), default="policy_greedy")
         cmd.add_argument("--report", type=Path)
+    scavenger_scenarios = ("scavenger_waste", "scavenger_carrion",
+                           "scavenger_competition", "scavenger_mixed")
+    scavenger = sub.add_parser("train-scavenger", help="M7: learn waste/carrion scavenging")
+    scavenger.add_argument("--steps", type=int, default=8192)
+    scavenger.add_argument("--seed", type=int, default=42)
+    scavenger.add_argument("--worlds", type=int, default=4)
+    scavenger.add_argument("--rollout", type=int, default=256)
+    scavenger.add_argument("--max-steps", type=int, default=48)
+    scavenger.add_argument("--scenario", choices=scavenger_scenarios,
+                           default="scavenger_mixed")
+    scavenger.add_argument("--output", type=Path, default=Path("runs/scavenger.pt"))
+    scavenger.add_argument("--init-checkpoint", type=Path)
+    for title in ("eval-scavenger", "benchmark-scavenger"):
+        cmd = sub.add_parser(title, help="M7: evaluate scavenger PPO and controls")
+        cmd.add_argument("--checkpoint", type=Path)
+        cmd.add_argument("--episodes", type=int, default=16)
+        cmd.add_argument("--seed", type=int, default=100000)
+        cmd.add_argument("--max-steps", type=int, default=48)
+        cmd.add_argument("--scenario", choices=scavenger_scenarios,
+                         default="scavenger_mixed")
+        cmd.add_argument("--mode", choices=("policy", "policy_greedy", "random",
+                                            "scripted", "policy_nowaste",
+                                            "policy_nocarrion"), default="policy_greedy")
+        cmd.add_argument("--report", type=Path)
     inspect = sub.add_parser("inspect", help="Show one actor's local observation and action mask")
     inspect.add_argument("--seed", type=int, default=42)
     inspect.add_argument("--cow-calls", action="store_true",
@@ -158,6 +182,33 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command in ("train-scavenger", "eval-scavenger", "benchmark-scavenger"):
+        try:
+            from .learning.scavenger_ppo import (ScavengerTrainOptions, train_scavenger,
+                                                 evaluate_scavenger)
+        except ImportError as exc:
+            raise SystemExit("Scavenger learning requires PyTorch: pip install -e '.[ml]'") from exc
+        if args.command == "train-scavenger":
+            result = train_scavenger(ScavengerTrainOptions(
+                steps=args.steps, seed=args.seed, worlds=args.worlds,
+                rollout=args.rollout, max_steps=args.max_steps, scenario=args.scenario),
+                args.output, init_checkpoint=args.init_checkpoint)
+            print(json.dumps({key: value for key, value in result.items()
+                              if key not in ("history", "recent_returns")}, indent=2))
+            return 0
+        modes = (("policy_greedy", "policy", "random", "scripted",
+                  "policy_nowaste", "policy_nocarrion")
+                 if args.command == "benchmark-scavenger" else (args.mode,))
+        result = {mode: evaluate_scavenger(
+            args.checkpoint, episodes=args.episodes, seed=args.seed,
+            max_steps=args.max_steps, scenario=args.scenario, mode=mode)
+                  for mode in modes}
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        print(json.dumps({mode: {k: v for k, v in results.items() if k != "results"}
+                          for mode, results in result.items()}, indent=2))
+        return 0
     if args.command in ("train-ravager", "eval-ravager", "benchmark-ravager"):
         try:
             from .learning.ravager_ppo import (RavagerTrainOptions, train_ravager,

@@ -189,15 +189,39 @@ def scripted_actions(world: World) -> dict[int, Action]:
                               key=lambda c: (abs(c.x - actor.x) + abs(c.y - actor.y), c.id))
                 action = _toward(world, actor, cows[0].position) if cows else Action(Kind.REST)
         elif actor.species == Species.SCAVENGER:
-            has_carcass = any(c.x == actor.x and c.y == actor.y
-                              for c in world.carcasses.values())
-            if has_carcass:
+            # A transparent reference policy: local smell/vision and real food,
+            # no knowledge of resources beyond detection range.
+            from .perception import _visible_actor
+            predators = [r for r in world.actors.values()
+                         if r.species == Species.RAVAGER and
+                         _visible_actor(world, actor, r)]
+            imminent = [r for r in predators if abs(r.x - actor.x) +
+                        abs(r.y - actor.y) <= 2]
+            edible = [c for c in world.carcasses.values()
+                      if c.carrier_id is None and c.x == actor.x and c.y == actor.y]
+            if imminent:
+                action = _away(world, actor, imminent[0].position)
+            elif edible and actor.energy < 99:
                 action = Action(Kind.EAT_CARCASS)
-            elif tile.waste >= 0.4:
+            elif tile.waste >= 0.1 and actor.energy < 99:
                 action = Action(Kind.EAT)
             else:
-                target = _nearest(world, actor, lambda t: t.waste >= 0.4)
-                action = _toward(world, actor, target) if target else Action(Kind.REST)
+                opportunities = []
+                for c in world.carcasses.values():
+                    d = abs(c.x - actor.x) + abs(c.y - actor.y)
+                    if c.carrier_id is None and d <= 7:
+                        opportunities.append((-c.meat / (d + 1), d, c.y, c.x))
+                for y in range(max(0, actor.y - 4), min(world.grid.height, actor.y + 5)):
+                    for x in range(max(0, actor.x - 4), min(world.grid.width, actor.x + 5)):
+                        d = abs(x - actor.x) + abs(y - actor.y)
+                        waste = world.grid.get(x, y).waste
+                        if d <= 4 and waste > 0.1:
+                            opportunities.append((-waste / (d + 1), d, y, x))
+                if opportunities and actor.energy < 98:
+                    _, _, y, x = min(opportunities)
+                    action = _toward(world, actor, (x, y))
+                else:
+                    action = Action(Kind.REST)
         else:
             # Interpretable M6 predator reference. This is a heuristic baseline,
             # not a hidden behavior imposed on neural-network-controlled actors.

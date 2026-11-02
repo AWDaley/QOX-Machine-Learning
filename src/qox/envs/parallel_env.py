@@ -25,7 +25,8 @@ class QoxParallelEnv(ParallelEnv):
                  nomad_v2: bool = False):
         if render_mode not in (None, "ansi"):
             raise ValueError("Only ANSI rendering is currently available")
-        if scenario in ("farmer_mixed", "nomad_mixed", "ravager_mixed"):
+        if scenario in ("farmer_mixed", "nomad_mixed", "ravager_mixed",
+                        "scavenger_mixed"):
             raise ValueError("Mixed curricula change agent populations across resets; "
                              "use a fixed scenario for the PettingZoo adapter")
         self.render_mode = render_mode
