@@ -92,13 +92,18 @@ def _obs(env: QoxCoreEnv, cow: str) -> dict:
     return env._observations()[cow]
 
 
-def train_cow(options: TrainOptions, output: str | Path) -> dict:
+def train_cow(options: TrainOptions, output: str | Path,
+              init_checkpoint: str | Path | None = None) -> dict:
     """Train for at least ``steps`` cow decisions (rounded to rollout size)."""
     torch.set_num_threads(1)
     torch.manual_seed(options.seed)
     np.random.seed(options.seed)
     random.seed(options.seed)
-    model = CowPolicy(options.hidden, cow_calls=options.cow_calls)
+    model = (load_cow(init_checkpoint) if init_checkpoint is not None else
+             CowPolicy(options.hidden, cow_calls=options.cow_calls))
+    if model.cow_calls != options.cow_calls or model.hidden != options.hidden:
+        raise ValueError("Initial cow checkpoint does not match the training schema")
+    model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=options.lr, eps=1e-5)
 
     environments = [_fresh_env(options.scenario, options.seed + 1009 * j,
