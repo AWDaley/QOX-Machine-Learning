@@ -22,6 +22,12 @@ jobs:
       - run: qox inspect --species cow --cow-calls --seed 42
       - run: qox inspect --species ravager --seed 42
       - run: qox inspect --species scavenger --seed 42
+      - run: qox inspect --species farmer --festivals --seed 42
+      - run: qox festival-demo --scenario festival_farmer --ticks 12
+      - run: qox festival-demo --scenario festival_nomad --ticks 12
+      - run: qox festival-demo --scenario festival_combined --ticks 12
+      - run: qox run --ticks 12 --mode scripted --festivals --trace runs/ci-festival-trace.json
+      - run: qox replay --trace runs/ci-festival-trace.json
   learning:
     runs-on: ubuntu-latest
     steps:
@@ -58,3 +64,8 @@ jobs:
       - run: qox benchmark-scavenger --checkpoint runs/ci-scavenger.pt --episodes 2 --max-steps 16 --scenario scavenger_competition --seed 97000
       - run: qox run --ticks 8 --mode learned-scavenger --checkpoint runs/ci-scavenger.pt --trace runs/ci-scavenger-trace.json
       - run: qox replay --trace runs/ci-scavenger-trace.json
+      - run: python -m pytest -q tests/test_m8.py
+      - run: qox train-festival --scenario festival_farmer --steps 128 --worlds 2 --rollout 64 --max-steps 12 --output runs/ci-festival.pt
+      - run: qox benchmark-festival --scenario festival_farmer --checkpoint runs/ci-festival.pt --episodes 2 --max-steps 12 --seed 99000
+      - run: qox run --ticks 10 --festivals --mode learned-festival --checkpoint runs/ci-festival.pt --trace runs/ci-learned-festival.json
+      - run: qox replay --trace runs/ci-learned-festival.json

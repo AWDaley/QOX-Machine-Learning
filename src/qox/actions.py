@@ -30,6 +30,10 @@ class Kind(StrEnum):
     ENTER_REFUGE = "enter_refuge"
     REST = "rest"
     ATTACK = "attack"
+    CONTRIBUTE_FESTIVAL = "contribute_festival"
+    START_FARMER_FESTIVAL = "start_farmer_festival"
+    START_NOMAD_FESTIVAL = "start_nomad_festival"
+    START_COMBINED_FESTIVAL = "start_combined_festival"
 
 
 DIRECTIONS = ((0, -1), (1, 0), (0, 1), (-1, 0))

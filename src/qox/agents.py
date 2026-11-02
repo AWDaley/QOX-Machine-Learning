@@ -86,6 +86,44 @@ def scripted_actions(world: World) -> dict[int, Action]:
     for aid in sorted(world.actors):
         actor = world.actors[aid]
         tile = world.grid.get(actor.x, actor.y)
+        # Transparent FESTIVAL BASELINE only: policies are free not to follow
+        # this heuristic. Testing its success is not evidence of learned society.
+        if world.config.festival_enabled and actor.species in (
+                Species.FARMER, Species.NOMAD):
+            from .festivals import (FestivalKind, can_start, contribution_target,
+                                    distance)
+            active_here = next((f for f in world.active_festivals.values()
+                                if distance(actor, f.x, f.y) <=
+                                world.config.festival_attendance_radius), None)
+            if active_here is not None:
+                ravagers = sorted((r for r in world.actors.values()
+                                   if r.species == Species.RAVAGER and
+                                   distance(actor, r.x, r.y) <= 1), key=lambda r: r.id)
+                if actor.species == Species.NOMAD and ravagers:
+                    orders[aid] = Action(Kind.ATTACK)
+                else:
+                    orders[aid] = Action(Kind.REST)
+                continue
+            if can_start(world, actor, FestivalKind.COMBINED):
+                orders[aid] = Action(Kind.START_COMBINED_FESTIVAL)
+                continue
+            own_type = (FestivalKind.FARMER if actor.species == Species.FARMER
+                        else FestivalKind.NOMAD)
+            if can_start(world, actor, own_type):
+                orders[aid] = Action(Kind.START_FARMER_FESTIVAL if
+                                     own_type == FestivalKind.FARMER else
+                                     Kind.START_NOMAD_FESTIVAL)
+                continue
+            site = contribution_target(world, actor)
+            if site is not None and actor.carried_food >= 1.0:
+                grain_need = (world.config.festival_combined_grain
+                              if actor.species == Species.FARMER
+                              else world.config.festival_combined_milk)
+                escrow = (site.festival_food if actor.species == Species.FARMER
+                          else site.festival_milk)
+                if escrow < grain_need:
+                    orders[aid] = Action(Kind.CONTRIBUTE_FESTIVAL)
+                    continue
         if actor.species == Species.COW:
             # M5 scripted *comparison* policy: perceives local calls, then
             # chooses to react. Calls NEVER move cattle through the world rules.
@@ -282,9 +320,19 @@ def scripted_actions(world: World) -> dict[int, Action]:
                           and actor.stamina >= world.config.ravager_sneak_stamina
                           and tile.cover >= 0.5 else step)
             else:
-                action = (_toward(world, actor, (local_carcass[0].x,
-                                                local_carcass[0].y)) if local_carcass
-                          else Action(Kind.REST))
+                from .festivals import festival_cue
+                fx, fy, strength = festival_cue(world, actor)
+                if strength > 0.03:
+                    # Follow a LOCAL festival noise/scent gradient, not a
+                    # global map target or a scripted teleport/spawn.
+                    radius = world.config.festival_signal_radius
+                    target = (actor.x + round(fx * radius),
+                              actor.y + round(fy * radius))
+                    action = _toward(world, actor, target)
+                else:
+                    action = (_toward(world, actor, (local_carcass[0].x,
+                                                    local_carcass[0].y)) if local_carcass
+                              else Action(Kind.REST))
         orders[aid] = action
     return orders
 

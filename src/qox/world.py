@@ -12,6 +12,10 @@ from .actions import Action, Kind
 from .config import SimulationConfig
 from .entities import Actor, CallSignal, Carcass, Event, Settlement, Species, Tile
 from .grid import Grid
+from .festivals import (Camp, Festival, FestivalKind, FestivalResult,
+                        advance as advance_festivals, can_start as can_start_festival,
+                        contribution_target, site_for as festival_site,
+                        start as start_festival)
 
 
 class World:
@@ -40,6 +44,17 @@ class World:
         self.calls: list[CallSignal] = []
         self.herd_goal: tuple[int, int] | None = None
         self._populate()
+        # Camps are fixed home markers, not shelters or teleport destinations.
+        self.camps: list[Camp] = []
+        if self.config.festival_enabled:
+            for band in sorted({a.band_id for a in self.actors.values()
+                                if a.species == Species.NOMAD and a.band_id is not None}):
+                leader = min((a for a in self.actors.values() if a.band_id == band),
+                             key=lambda a: a.id)
+                self.camps.append(Camp(band, leader.x, leader.y))
+        self.active_festivals: dict[int, Festival] = {}
+        self.festival_results: list[FestivalResult] = []
+        self.next_festival_id = 1
         self.check_invariants()
 
     def _populate(self) -> None:
@@ -72,6 +87,7 @@ class World:
                 available.remove((x, y))
                 actor = Actor(id=self.next_id, species=species, x=x, y=y,
                               home_id=home.id if species == Species.FARMER else None,
+                              band_id=1 + i % 2 if species == Species.NOMAD else None,
                               carried_food=2.0 if species == Species.FARMER else 0.0)
                 self.actors[actor.id] = actor
                 self.next_id += 1
@@ -81,6 +97,12 @@ class World:
         actor = self.actors.get(actor_id) if actor_id is not None else None
         event = Event(self.tick, kind, actor_id, round(amount, 6), detail,
                       actor.x if actor else None, actor.y if actor else None)
+        self.events.append(event)
+        self.last_events.append(event)
+
+    def emit_at(self, kind: str, x: int, y: int, actor_id: int | None = None,
+                amount: float = 0.0, detail: str = "") -> None:
+        event = Event(self.tick, kind, actor_id, round(amount, 6), detail, x, y)
         self.events.append(event)
         self.last_events.append(event)
 
@@ -247,6 +269,35 @@ class World:
                      if (actor.home_id is None or actor.home_id == s.id)
                      and abs(actor.x - s.x) + abs(actor.y - s.y) <= 1), None)
 
+    def _festival_proposals(self, orders: dict[int, Action]) -> None:
+        """Validate simultaneous proposals BEFORE any same-tick contributions.
+
+        A seeded lottery breaks ties at a physical site instead of favoring
+        low actor IDs. Validation considers positions after simultaneous moves.
+        """
+        if not self.config.festival_enabled:
+            return
+        modes = {Kind.START_FARMER_FESTIVAL: FestivalKind.FARMER,
+                 Kind.START_NOMAD_FESTIVAL: FestivalKind.NOMAD,
+                 Kind.START_COMBINED_FESTIVAL: FestivalKind.COMBINED}
+        requests: dict[tuple[str, int], list[tuple[int, FestivalKind]]] = defaultdict(list)
+        for aid in sorted(orders):
+            actor = self.actors[aid]
+            action = orders[aid]
+            mode = modes.get(action.kind)
+            if mode is None or actor.hibernating or actor.charge_windup or actor.charge_recovery:
+                continue
+            if not can_start_festival(self, actor, mode):
+                continue
+            site = festival_site(self, actor, mode)
+            assert site is not None
+            key = ("camp" if mode == FestivalKind.NOMAD else "settlement", site.id)
+            requests[key].append((aid, mode))
+        for key in sorted(requests):
+            candidates = sorted(requests[key], key=lambda item: (item[0], item[1].value))
+            aid, mode = candidates[self.rng.randrange(len(candidates))]
+            start_festival(self, self.actors[aid], mode)
+
     def _interact(self, actor: Actor, action: Action) -> None:
         tile = self.grid.get(actor.x, actor.y)
         kind = action.kind
@@ -260,8 +311,29 @@ class World:
             return
         if actor.charge_windup or actor.charge_recovery:
             return
-        # Interior shelter excludes all field work and physical attacks.
+        # Interior shelter excludes all field work, festival participation and attacks.
         if actor.sheltered and kind not in (Kind.REST, Kind.EAT, Kind.DEPOSIT):
+            return
+        if kind == Kind.CONTRIBUTE_FESTIVAL:
+            site = contribution_target(self, actor)
+            if site is not None and actor.carried_food > 0:
+                amount = min(2.0, actor.carried_food)
+                actor.carried_food -= amount
+                if actor.species == Species.FARMER:
+                    site.festival_food += amount
+                elif actor.species == Species.NOMAD:
+                    site.festival_milk += amount
+                self.emit("festival_contribution", actor.id, amount,
+                          f"{actor.species.value}:{site.id}")
+            return
+        festival_actions = {
+            Kind.START_FARMER_FESTIVAL: FestivalKind.FARMER,
+            Kind.START_NOMAD_FESTIVAL: FestivalKind.NOMAD,
+            Kind.START_COMBINED_FESTIVAL: FestivalKind.COMBINED,
+        }
+        if kind in festival_actions:
+            # All start proposals resolve in a separate simultaneous stage;
+            # no participant can spend food contributed later this same tick.
             return
         if actor.species == Species.RAVAGER:
             if kind == Kind.CHARGE:
@@ -545,6 +617,7 @@ class World:
         self._movement(orders)
         self._enter_refuges(orders)
         self._resolve_charges(pending)
+        self._festival_proposals(orders)
         # Stable ID order matters for deterministic shared-resource resolution.
         for aid in sorted(self.actors):
             if aid in pending:
@@ -553,6 +626,8 @@ class World:
         if self.tick % self.config.ecology_interval == 0:
             self._ecology()
         self._metabolism()
+        if self.config.festival_enabled:
+            advance_festivals(self)
         self.check_invariants()
 
     def check_invariants(self) -> None:
@@ -592,7 +667,18 @@ class World:
             if carcass.carrier_id is not None:
                 holder = self.actors[carcass.carrier_id]
                 assert holder.dragged_carcass_id == carcass.id
-        assert all(s.stored_food >= 0 for s in self.settlements)
+        assert all(s.stored_food >= 0 and s.festival_food >= -1e-8 and
+                   s.festival_milk >= -1e-8 and s.cooldown_until >= 0
+                   for s in self.settlements)
+        assert all(c.festival_milk >= -1e-8 and c.cooldown_until >= 0
+                   for c in self.camps)
+        assert all(a.band_id is not None for a in self.actors.values()
+                   if a.species == Species.NOMAD)
+        for festival in self.active_festivals.values():
+            assert festival.end_tick > festival.start_tick
+            assert festival.kind in FestivalKind
+            assert self.grid.contains(festival.x, festival.y)
+            assert festival.grain_spent >= 0 and festival.milk_spent >= 0
         assert all(sig.kind in (Kind.FRIENDLY_CALL.value, Kind.SCARY_CALL.value)
                    and sig.radius >= 1 and sig.tick <= self.tick for sig in self.calls)
 
@@ -605,6 +691,11 @@ class World:
             "settlements": [asdict(s) for s in self.settlements],
             "carcasses": [asdict(self.carcasses[cid]) for cid in sorted(self.carcasses)],
             "calls": [asdict(signal) for signal in self.calls],
+            "camps": [asdict(camp) for camp in self.camps],
+            "active_festivals": [asdict(self.active_festivals[fid])
+                                 for fid in sorted(self.active_festivals)],
+            "festival_results": [asdict(result) for result in self.festival_results],
+            "next_festival_id": self.next_festival_id,
             "herd_goal": self.herd_goal,
         }
 
@@ -624,6 +715,12 @@ class World:
             "crops": round(sum(t.crop for t in self.grid.tiles), 3),
             "waste": round(sum(t.waste for t in self.grid.tiles), 3),
             "stored_food": round(sum(s.stored_food for s in self.settlements), 3),
+            "festival_grain_escrow": round(sum(s.festival_food for s in self.settlements), 3),
+            "festival_milk_escrow": round(sum(s.festival_milk for s in self.settlements) +
+                                          sum(c.festival_milk for c in self.camps), 3),
+            "active_festivals": len(self.active_festivals),
+            "festival_successes": sum(result.succeeded for result in self.festival_results),
+            "festival_failures": sum(not result.succeeded for result in self.festival_results),
             "sheltered_farmers": sum(a.sheltered for a in self.actors.values()),
             "carcass_meat": round(sum(c.meat for c in self.carcasses.values()), 3),
             "events": dict(sorted(kinds.items())),

@@ -189,3 +189,39 @@ class ScavengerController:
                 choice = max(range(len(probs)), key=lambda index: probs[index])
                 orders[actor.id] = ACTIONS[Species.SCAVENGER][choice]
         return orders
+
+
+class FestivalController:
+    """Use a frozen M8 farmer/nomad festival policy in a normal world.
+
+    The full world must have festival_enabled=True. Other roles, including
+    ravagers, retain their scripted baselines so festival consequences are real.
+    """
+
+    def __init__(self, checkpoint: str | Path):
+        from .festival_ppo import load_festival, species_for
+        self.model, self.scenario = load_festival(checkpoint)
+        self.species = species_for(self.scenario)
+
+    def probabilities(self, world: World, actor_id: int) -> list[float]:
+        if not world.config.festival_enabled:
+            raise ValueError("Festival policy requires festival_enabled=True")
+        actor = world.actors[actor_id]
+        if actor.species != self.species:
+            raise ValueError("FestivalController only controls its trained species")
+        state = observe(world, actor, festivals=True)
+        with torch.no_grad():
+            dist, _ = self.model(
+                torch.as_tensor(state["observation"]).unsqueeze(0),
+                torch.as_tensor(state["action_mask"]).unsqueeze(0))
+            return dist.probs.squeeze(0).tolist()
+
+    def actions(self, world: World) -> dict:
+        from ..perception import action_catalog
+        orders = scripted_actions(world)
+        for actor in world.actors.values():
+            if actor.species == self.species:
+                probs = self.probabilities(world, actor.id)
+                choice = max(range(len(probs)), key=lambda i: probs[i])
+                orders[actor.id] = action_catalog(self.species, festivals=True)[choice]
+        return orders

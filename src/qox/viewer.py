@@ -18,12 +18,19 @@ COLORS = {
 
 
 def display(config: SimulationConfig, mode: str = "scripted",
-            checkpoint=None, cow_checkpoint=None) -> None:
+            checkpoint=None, cow_checkpoint=None, scenario: str = "natural") -> None:
     try:
         import pygame
     except ImportError as exc:
         raise RuntimeError("Viewer requires: python -m pip install -e '.[viewer]'") from exc
 
+    world = None
+    if scenario != "natural":
+        from .envs.core import QoxCoreEnv
+        event_world = QoxCoreEnv(scenario=scenario)
+        event_world.reset(seed=config.seed)
+        world = event_world.world
+        config = world.config
     pygame.init()
     tile_px = max(10, min(22, 780 // max(config.width, config.height)))
     width = config.width * tile_px
@@ -32,15 +39,16 @@ def display(config: SimulationConfig, mode: str = "scripted",
     pygame.display.set_caption("QOX — Multi-Agent Ecosystem")
     font = pygame.font.Font(None, 24)
     clock = pygame.time.Clock()
-    world = World(config)
+    if world is None:
+        world = World(config)
     controller = None
     if mode in ("learned-cow", "learned-farmer", "learned-nomad", "learned-herd",
-                "learned-ravager", "learned-scavenger"):
+                "learned-ravager", "learned-scavenger", "learned-festival"):
         if checkpoint is None:
             raise ValueError("--checkpoint is required for learned actor mode")
         from .learning.inference import (CowController, FarmerController,
                                          NomadController, HerdController, RavagerController,
-                                         ScavengerController)
+                                         ScavengerController, FestivalController)
         if mode == "learned-herd" and cow_checkpoint is None:
             raise ValueError("--cow-checkpoint required for learned-herd")
         controller = (CowController(checkpoint) if mode == "learned-cow"
@@ -48,7 +56,11 @@ def display(config: SimulationConfig, mode: str = "scripted",
                       else NomadController(checkpoint) if mode == "learned-nomad"
                       else RavagerController(checkpoint) if mode == "learned-ravager"
                       else ScavengerController(checkpoint) if mode == "learned-scavenger"
+                      else FestivalController(checkpoint) if mode == "learned-festival"
                       else HerdController(checkpoint, cow_checkpoint))
+        if mode == "learned-festival" and scenario != "natural" and (
+                controller.scenario != scenario):
+            raise ValueError("Festival checkpoint must match the selected viewer scenario")
     selected_id = None
     paused = False
     single_step = False
@@ -108,6 +120,19 @@ def display(config: SimulationConfig, mode: str = "scripted",
             pygame.draw.rect(screen, (72, 64, 142),
                              (settlement.x * tile_px, settlement.y * tile_px,
                               tile_px, tile_px))
+        for camp in world.camps:
+            pygame.draw.circle(screen, (240, 185, 95),
+                               (camp.x * tile_px + tile_px // 2,
+                                camp.y * tile_px + tile_px // 2),
+                               max(4, tile_px // 2), 2)
+        for festival in world.active_festivals.values():
+            progress = (world.tick - festival.start_tick) / max(
+                1, festival.end_tick - festival.start_tick)
+            radius = int((2.5 + progress * 2.0) * tile_px)
+            pygame.draw.circle(screen, (255, 222, 87),
+                               (festival.x * tile_px + tile_px // 2,
+                                festival.y * tile_px + tile_px // 2),
+                               radius, width=2)
         for carcass in world.carcasses.values():
             pygame.draw.circle(screen, (123, 43, 33),
                                (carcass.x * tile_px + tile_px // 2,
@@ -133,7 +158,10 @@ def display(config: SimulationConfig, mode: str = "scripted",
                 screen.blit(label, (settlement.x * tile_px, settlement.y * tile_px))
         pygame.draw.rect(screen, (18, 23, 29), (0, height, width, 78))
         populations = world.summary()["population"]
-        line1 = f"Tick {world.tick}  {'PAUSED' if paused else 'RUNNING'}  {fps} TPS"
+        line1 = (f"Tick {world.tick}  {'PAUSED' if paused else 'RUNNING'}  {fps} TPS"
+                 f"  Festivals {world.summary()['festival_successes']} successful /"
+                 f" {world.summary()['festival_failures']} failed"
+                 f" ({len(world.active_festivals)} active)")
         line2 = " ".join(f"{kind[0].upper()}:{n}" for kind, n in populations.items())
         line2 += "   SPACE pause | N step | +/- speed | ESC quit"
         screen.blit(font.render(line1, True, (230, 230, 230)), (9, height + 3))
@@ -151,17 +179,18 @@ def display(config: SimulationConfig, mode: str = "scripted",
                           Species.FARMER if mode == "learned-farmer" else
                           Species.NOMAD if mode == "learned-nomad" else
                           Species.RAVAGER if mode == "learned-ravager" else
-                          Species.SCAVENGER if mode == "learned-scavenger" else None)
+                          Species.SCAVENGER if mode == "learned-scavenger" else
+                          controller.species if mode == "learned-festival" else None)
             is_controlled = (controller is not None and
                              (selected.species == controlled or
                               (mode == "learned-herd" and selected.species in
                                (Species.COW, Species.NOMAD))))
             if is_controlled:
-                from .perception import ACTIONS
+                from .perception import action_catalog
                 probabilities = controller.probabilities(world, selected.id)
                 best = sorted(range(len(probabilities)),
                               key=lambda i: probabilities[i], reverse=True)[:2]
-                info += "  " + " ".join(f"{ACTIONS[selected.species][i].kind.value}:"
+                info += "  " + " ".join(f"{action_catalog(selected.species, festivals=(mode == 'learned-festival'))[i].kind.value}:"
                                        f"{probabilities[i]:.2f}" for i in best)
             screen.blit(font.render(info, True, (230, 230, 230)), (9, height + 52))
         else:
