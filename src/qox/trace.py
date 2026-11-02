@@ -39,13 +39,19 @@ class Trace:
 
 
 def run(config: SimulationConfig, ticks: int, mode: str = "scripted",
-        record: bool = False) -> tuple[World, Trace | None]:
+        record: bool = False, checkpoint: str | Path | None = None) -> tuple[World, Trace | None]:
     if ticks < 0:
         raise ValueError("ticks cannot be negative")
     world = World(config)
     trace = Trace(config.as_dict()) if record else None
+    controller = None
+    if mode == "learned-cow":
+        if checkpoint is None:
+            raise ValueError("--checkpoint is required for learned-cow mode")
+        from .learning.inference import CowController
+        controller = CowController(checkpoint)
     for _ in range(ticks):
-        orders = actions_for(world, mode)
+        orders = controller.actions(world) if controller else actions_for(world, mode)
         world.step(orders)
         if trace:
             trace.append(world, orders)

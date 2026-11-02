@@ -19,6 +19,7 @@ class Kind(StrEnum):
     EAT_CARCASS = "eat_carcass"
     DEPOSIT = "deposit"
     REST = "rest"
+    ATTACK = "attack"
 
 
 DIRECTIONS = ((0, -1), (1, 0), (0, 1), (-1, 0))

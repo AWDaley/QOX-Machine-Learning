@@ -1,59 +1,69 @@
 # QOX Machine Learning
 
-**M0–M1 foundation implemented.** QOX is an experimental deterministic, headless-first, 2D multi-agent artificial-life simulator. Its planned learning phase uses five species-specific neural-network policies: farmers, cows, nomads, scavengers, and ravagers.
+**Current status: M0–M3 implemented (ecosystem foundation, local perception, ParallelEnv adapter, first cow neural-network policy).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
 
-## Run it
+## Quick start
 
-Python 3.11+; no Docker, database, GPU, or PyTorch needed for M0–M1.
+Python 3.11+; no Docker, database or GPU required. Core simulation and perception use NumPy. PettingZoo and PyTorch are optional extras.
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-python -m pip install -e '.[dev]'
-qox run --ticks 200 --mode scripted --seed 42
+python -m pip install -e ".[dev,ml,viewer]"
 python -m pytest -q
-```
-
-On macOS/Linux, use `source .venv/bin/activate` instead of the PowerShell activation command.
-
-To save a report and an exact action trace:
-
-```bash
-qox run --ticks 200 --seed 42 --mode random --report runs/report.json --trace runs/trace.json
-qox replay --trace runs/trace.json
-```
-
-For the optional animated viewer:
-
-```bash
-python -m pip install -e '.[viewer]'
+qox run --ticks 200 --mode scripted --seed 42
 qox viewer --seed 42 --mode scripted
 ```
 
-Viewer controls: **Space** pause/resume, **N** single step, **+/-** speed, **Esc** quit. The viewer is observational only; simulation physics do not depend on its framerate. Initial viewer uses colored circles: blue farmers, white cows, orange nomads, purple scavengers, red ravagers; violet squares mark settlements.
+On macOS/Linux, activate with `source .venv/bin/activate`. To install only basic simulation requirements, use `pip install -e .`. To install the PettingZoo adapter without PyTorch, use `pip install -e ".[marl]"`. The `dev` extra includes PettingZoo for conformance tests.
 
-Use `qox run --config configs/default.toml --ticks 300` to load a TOML configuration. CLI `--seed` overrides the config seed. Also supported: `python -m qox run ...`.
+## Learn with real neural networks (M3)
 
-## Implemented (M0–M1)
+```powershell
+# Local CPU-first training, starting with 8,192 cow decisions
+qox train-cow --steps 8192 --seed 42 --scenario forage --output runs/cow.pt
 
-- Seeded world creation and validated config.
-- 2D terrain with soil fertility, grass, crops, cover, finite waste and carcasses.
-- Simultaneous cardinal movement with seeded conflict resolution, support for swaps and blocked chains.
-- Five actor types with energy/stamina and simple scripted/random **baselines**.
-- Cows consume grass or farmer crops and convert real intake into milk and dung.
-- Farmers can plant, harvest, collect manure, fertilize, deposit and eat food.
-- Nomads can collect nearby cow milk and consume it.
-- Scavengers can eat manure or carrion; ravagers can eat carrion.
-- Hunger, death and finite carcasses; ecology advances at a configurable slower interval.
-- Structured event ledger, state hashes, seeded action trace and replay verification.
-- CLI, basic optional Pygame viewer, pytest and GitHub Actions CI.
+# Held-out evaluation: frozen learned policy vs random and scripted cows
+qox benchmark-cow --checkpoint runs/cow.pt --episodes 30 --seed 100000 --report runs/benchmark.json
+
+# Run learned cows in the full ecosystem; others still scripted
+qox run --ticks 200 --mode learned-cow --checkpoint runs/cow.pt --trace runs/cow-trace.json
+qox replay --trace runs/cow-trace.json
+qox viewer --mode learned-cow --checkpoint runs/cow.pt
+```
+
+The training scenario is **deliberately simplified**, with patchy grass, one cow and stronger metabolism. It is not the same as the full 40×40 world. In the combined world the policy may transfer imperfectly. For a more substantial experiment, try `--steps 65536` and compare several training seeds. The viewer supports **Space** pause, **N** single-step, **+/-** speed, **click** to inspect an actor, and **Esc** quit. Learned cow mode displays an actor's two most probable actions.
+
+To evaluate an individual mode or a threat scenario:
+
+```powershell
+qox eval-cow --checkpoint runs/cow.pt --mode policy --episodes 20 --seed 100000
+qox eval-cow --mode random --episodes 20 --seed 100000
+qox inspect --species cow --seed 42
+```
+
+The `threat` learning scenario includes a minimal scripted ravager contact attack; advanced hunting, stealth and charge mechanics will be added in M6. Do not interpret M3 as demonstrating learned herding or tactical predator evasion yet.
+
+## Implemented
+
+- Seeded 2D world with vegetation, fertile soil, crops, cattle waste, milk, carcasses, storage and energy expenditure.
+- Simultaneous cardinal movement with deterministic tie resolution, immutable action traces, replay and invariant tests.
+- Five species with scripted/random baseline actions and finite resources.
+- **M2:** 60 named, bounded local observation features; vision with cover occlusion, waste scent gradients, recent sound cues, actor-relative targets and role-specific legal-action masks.
+- **M2:** Core simultaneous-action environment plus optional PettingZoo ParallelEnv adapter exposing Gymnasium Dict observations containing `observation` and `action_mask`.
+- **M3:** Compact PyTorch actor-critic, masked PPO, configurable curricula, saved/checkable policies, frozen-policy evaluation against two baselines, and a learned-cow viewer mode.
+- Simple non-stealth ravager contact attack to create a real early survival threat.
+- CLI, ANSI and Pygame visualization, structured events, automated Python CI.
 
 ## Not yet implemented
 
-**These are planned, not existing functionality:** neural-network training, learned perception, farmer refuge, nomad friendly/scary calls and combat, ravager stealth/charge/hunting/dragging/hibernation, group festivals, births and long-term policy evaluation. The M1 baseline actors are not learned policies, and M1 resource tuning is preliminary.
+The other four species **do not have learned policies yet**. M4–M9 will add farmer refuge and advanced agriculture, nomad push/pull calls and defense, ravager stealth/charge/drag/hibernate, scavenger nutrient competition, solo/combined festivals and reproduction. Features described in the design plan are not claims of completed code. QOX currently demonstrates foraging-policy training, not a validated stable ecology.
 
-Read the [full implementation plan](docs/IMPLEMENTATION_PLAN.md) for milestone gates M0–M9 and research experiments. **Next milestone: M2 (local perception and the PettingZoo adapter), followed by M3 (first learned cow PPO policy).**
+## Documents
 
-## Engineering rules
+- [Complete implementation plan](docs/IMPLEMENTATION_PLAN.md)
+- [M2–M3 observations, training and baseline results](docs/M2_M3_LEARNING.md)
 
-World rules and finite resource accounting are explicit; learned strategies will live outside the world engine. Always distinguish scripted baseline behavior from learned behavior, keep deterministic scenario seeds and action traces, and evaluate frozen policies on held-out worlds. Reports and logs in `runs/` are local artifacts and are ignored by git.
+## Scientific reproducibility
+
+Training checkpoints record policy weights, hyperparameters, action/observation schemas and training steps. Evaluation uses separate seed ranges, frozen model weights, identical world seeds for the policy and baselines, and raw results in JSON. Action traces can be replayed against hash-checked world state. The learning process is stochastic and results depend on seed, training budget and scenario. All local artifacts under `runs/` are intentionally ignored by Git.

@@ -110,10 +110,21 @@ def scripted_actions(world: World) -> dict[int, Action]:
                 target = _nearest(world, actor, lambda t: t.waste >= 0.4)
                 action = _toward(world, actor, target) if target else Action(Kind.REST)
         else:
+            # Minimal contact-bite predator for M3 threat scenarios. The full
+            # sneak/charge/drag/hibernate behavior is reserved for M6.
+            prey = sorted((a for a in world.actors.values()
+                           if a.id != actor.id and a.species != Species.RAVAGER
+                           and abs(a.x - actor.x) + abs(a.y - actor.y) <= 6),
+                          key=lambda a: (abs(a.x - actor.x) + abs(a.y - actor.y), a.id))
+            nearby = [a for a in prey if abs(a.x - actor.x) + abs(a.y - actor.y) <= 1]
             has_carcass = any(c.x == actor.x and c.y == actor.y
                               for c in world.carcasses.values())
             if has_carcass:
                 action = Action(Kind.EAT_CARCASS)
+            elif nearby and actor.stamina >= 4.0:
+                action = Action(Kind.ATTACK)
+            elif prey:
+                action = _toward(world, actor, prey[0].position)
             else:
                 carcasses = sorted(world.carcasses.values(),
                                    key=lambda c: (abs(c.x - actor.x) + abs(c.y - actor.y), c.id))

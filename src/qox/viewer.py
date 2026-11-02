@@ -17,7 +17,8 @@ COLORS = {
 }
 
 
-def display(config: SimulationConfig, mode: str = "scripted") -> None:
+def display(config: SimulationConfig, mode: str = "scripted",
+            checkpoint=None) -> None:
     try:
         import pygame
     except ImportError as exc:
@@ -27,11 +28,18 @@ def display(config: SimulationConfig, mode: str = "scripted") -> None:
     tile_px = max(10, min(22, 780 // max(config.width, config.height)))
     width = config.width * tile_px
     height = config.height * tile_px
-    screen = pygame.display.set_mode((width, height + 54))
-    pygame.display.set_caption("QOX M1 — Deterministic Ecosystem")
+    screen = pygame.display.set_mode((width, height + 78))
+    pygame.display.set_caption("QOX — Multi-Agent Ecosystem")
     font = pygame.font.Font(None, 24)
     clock = pygame.time.Clock()
     world = World(config)
+    controller = None
+    if mode == "learned-cow":
+        if checkpoint is None:
+            raise ValueError("--checkpoint is required for learned-cow mode")
+        from .learning.inference import CowController
+        controller = CowController(checkpoint)
+    selected_id = None
     paused = False
     single_step = False
     fps = 12
@@ -40,6 +48,12 @@ def display(config: SimulationConfig, mode: str = "scripted") -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = event.pos
+                if my < height:
+                    tx, ty = mx // tile_px, my // tile_px
+                    selected_id = next((a.id for a in world.actors.values()
+                                        if a.position == (tx, ty)), None)
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
@@ -52,7 +66,8 @@ def display(config: SimulationConfig, mode: str = "scripted") -> None:
                 elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
                     fps = max(1, fps - 5)
         if not paused or single_step:
-            world.step(actions_for(world, mode))
+            orders = controller.actions(world) if controller else actions_for(world, mode)
+            world.step(orders)
             single_step = False
         for y in range(config.height):
             for x in range(config.width):
@@ -79,13 +94,29 @@ def display(config: SimulationConfig, mode: str = "scripted") -> None:
             pygame.draw.circle(screen, COLORS[actor.species], (cx, cy), max(3, tile_px // 3))
             if actor.species == Species.COW:
                 pygame.draw.circle(screen, (30, 30, 30), (cx, cy), max(1, tile_px // 9))
-        pygame.draw.rect(screen, (18, 23, 29), (0, height, width, 54))
+        pygame.draw.rect(screen, (18, 23, 29), (0, height, width, 78))
         populations = world.summary()["population"]
         line1 = f"Tick {world.tick}  {'PAUSED' if paused else 'RUNNING'}  {fps} TPS"
         line2 = " ".join(f"{kind[0].upper()}:{n}" for kind, n in populations.items())
         line2 += "   SPACE pause | N step | +/- speed | ESC quit"
         screen.blit(font.render(line1, True, (230, 230, 230)), (9, height + 3))
-        screen.blit(font.render(line2, True, (230, 230, 230)), (9, height + 28))
+        screen.blit(font.render(line2, True, (230, 230, 230)), (9, height + 26))
+        selected = world.actors.get(selected_id)
+        if selected is not None:
+            info = (f"#{selected.id} {selected.species.value}  "
+                    f"energy:{selected.energy:.1f} hp:{selected.health:.1f} "
+                    f"stamina:{selected.stamina:.1f}")
+            if controller and selected.species == Species.COW:
+                from .perception import ACTIONS
+                probabilities = controller.probabilities(world, selected.id)
+                best = sorted(range(len(probabilities)),
+                              key=lambda i: probabilities[i], reverse=True)[:2]
+                info += "  " + " ".join(f"{ACTIONS[Species.COW][i].kind.value}:"
+                                       f"{probabilities[i]:.2f}" for i in best)
+            screen.blit(font.render(info, True, (230, 230, 230)), (9, height + 52))
+        else:
+            screen.blit(font.render("Click an actor to inspect its state.", True,
+                                    (180, 190, 200)), (9, height + 52))
         pygame.display.flip()
         clock.tick(fps)
     pygame.quit()

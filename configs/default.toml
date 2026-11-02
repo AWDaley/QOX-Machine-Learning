@@ -18,3 +18,4 @@ max_waste = 10.0
 grass_growth = 0.45
 crop_growth = 0.55
 waste_decay = 0.12
+cow_metabolism = 0.045
