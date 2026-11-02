@@ -273,11 +273,20 @@ def call_features(world: World, actor: Actor) -> tuple[float, ...]:
 
 def legal_action_mask(world: World, actor: Actor, *, festivals: bool = False) -> np.ndarray:
     """Mask only physically impossible actions; collision-risky moves stay legal."""
+    from .population import is_juvenile
+    juvenile = is_juvenile(world, actor)
     tile = world.grid.get(*actor.position)
     mask = []
     for action in action_catalog(actor.species, festivals=festivals):
         kind = action.kind
         valid = True
+        if juvenile and kind in (
+                Kind.DASH, Kind.MILK, Kind.ATTACK, Kind.CHARGE,
+                Kind.FRIENDLY_CALL, Kind.SCARY_CALL, Kind.CONTRIBUTE_FESTIVAL,
+                Kind.START_FARMER_FESTIVAL, Kind.START_NOMAD_FESTIVAL,
+                Kind.START_COMBINED_FESTIVAL):
+            mask.append(0)
+            continue
         if actor.hibernating:
             mask.append(int(kind in (Kind.WAIT, Kind.WAKE)))
             continue

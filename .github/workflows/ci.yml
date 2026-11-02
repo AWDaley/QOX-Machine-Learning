@@ -28,6 +28,11 @@ jobs:
       - run: qox festival-demo --scenario festival_combined --ticks 12
       - run: qox run --ticks 12 --mode scripted --festivals --trace runs/ci-festival-trace.json
       - run: qox replay --trace runs/ci-festival-trace.json
+      - run: python -m pytest -q tests/test_m9.py
+      - run: qox run --ticks 35 --mode scripted --reproduction --trace runs/ci-population-trace.json
+      - run: qox replay --trace runs/ci-population-trace.json
+      - run: qox population-study --ticks 40 --seeds 2 --sample-every 10 --seed 200000 --mode scripted --report runs/ci-m9-births.json
+      - run: qox population-study --ticks 40 --seeds 2 --sample-every 10 --seed 200000 --mode scripted --without-births --report runs/ci-m9-no-births.json
   learning:
     runs-on: ubuntu-latest
     steps:
@@ -69,3 +74,4 @@ jobs:
       - run: qox benchmark-festival --scenario festival_farmer --checkpoint runs/ci-festival.pt --episodes 2 --max-steps 12 --seed 99000
       - run: qox run --ticks 10 --festivals --mode learned-festival --checkpoint runs/ci-festival.pt --trace runs/ci-learned-festival.json
       - run: qox replay --trace runs/ci-learned-festival.json
+      - run: qox population-study --ticks 10 --seeds 1 --sample-every 5 --mode learned --festivals --festival-checkpoint runs/ci-festival.pt --report runs/ci-m9-frozen.json

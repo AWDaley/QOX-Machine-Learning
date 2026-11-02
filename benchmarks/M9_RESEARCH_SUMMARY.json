@@ -1,0 +1,596 @@
+{
+  "scripted_births_600": {
+    "mode": "scripted",
+    "ticks": 600,
+    "seeds": 3,
+    "initial_seed": 260000,
+    "reproduction_enabled": true,
+    "festival_enabled": false,
+    "mean_final_population": {
+      "farmer": 14,
+      "cow": 60,
+      "nomad": 4.6667,
+      "scavenger": 24,
+      "ravager": 1
+    },
+    "mean_births": {
+      "farmer": 2,
+      "cow": 32,
+      "nomad": 0,
+      "scavenger": 12.3333,
+      "ravager": 2.6667
+    },
+    "mean_deaths": {
+      "farmer": 0,
+      "cow": 2,
+      "nomad": 1.3333,
+      "scavenger": 0.3333,
+      "ravager": 4.6667
+    },
+    "mean_festival_successes": 0,
+    "outcomes": [
+      {
+        "seed": 260000,
+        "final_population": {
+          "farmer": 18,
+          "cow": 60,
+          "nomad": 4,
+          "scavenger": 24,
+          "ravager": 1
+        },
+        "births": {
+          "farmer": 6,
+          "cow": 31,
+          "nomad": 0,
+          "scavenger": 13,
+          "ravager": 3
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 1,
+          "nomad": 2,
+          "scavenger": 1,
+          "ravager": 5
+        },
+        "death_causes": {
+          "starvation": 3,
+          "predation": 4,
+          "age": 0,
+          "other": 2
+        },
+        "festival_successes": 0
+      },
+      {
+        "seed": 260001,
+        "final_population": {
+          "farmer": 12,
+          "cow": 60,
+          "nomad": 4,
+          "scavenger": 24,
+          "ravager": 1
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 33,
+          "nomad": 0,
+          "scavenger": 12,
+          "ravager": 3
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 3,
+          "nomad": 2,
+          "scavenger": 0,
+          "ravager": 5
+        },
+        "death_causes": {
+          "starvation": 2,
+          "predation": 5,
+          "age": 0,
+          "other": 3
+        },
+        "festival_successes": 0
+      },
+      {
+        "seed": 260002,
+        "final_population": {
+          "farmer": 12,
+          "cow": 60,
+          "nomad": 6,
+          "scavenger": 24,
+          "ravager": 1
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 32,
+          "nomad": 0,
+          "scavenger": 12,
+          "ravager": 2
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 2,
+          "nomad": 0,
+          "scavenger": 0,
+          "ravager": 4
+        },
+        "death_causes": {
+          "starvation": 0,
+          "predation": 2,
+          "age": 0,
+          "other": 4
+        },
+        "festival_successes": 0
+      }
+    ]
+  },
+  "scripted_no_births_600": {
+    "mode": "scripted",
+    "ticks": 600,
+    "seeds": 3,
+    "initial_seed": 260000,
+    "reproduction_enabled": false,
+    "festival_enabled": false,
+    "mean_final_population": {
+      "farmer": 12,
+      "cow": 28,
+      "nomad": 4.6667,
+      "scavenger": 12,
+      "ravager": 0
+    },
+    "mean_births": {
+      "farmer": 0,
+      "cow": 0,
+      "nomad": 0,
+      "scavenger": 0,
+      "ravager": 0
+    },
+    "mean_deaths": {
+      "farmer": 0,
+      "cow": 2,
+      "nomad": 1.3333,
+      "scavenger": 0,
+      "ravager": 3
+    },
+    "mean_festival_successes": 0,
+    "outcomes": [
+      {
+        "seed": 260000,
+        "final_population": {
+          "farmer": 12,
+          "cow": 29,
+          "nomad": 4,
+          "scavenger": 12,
+          "ravager": 0
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 0,
+          "nomad": 0,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 1,
+          "nomad": 2,
+          "scavenger": 0,
+          "ravager": 3
+        },
+        "death_causes": {
+          "starvation": 0,
+          "predation": 3,
+          "age": 0,
+          "other": 3
+        },
+        "festival_successes": 0
+      },
+      {
+        "seed": 260001,
+        "final_population": {
+          "farmer": 12,
+          "cow": 28,
+          "nomad": 5,
+          "scavenger": 12,
+          "ravager": 0
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 0,
+          "nomad": 0,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 2,
+          "nomad": 1,
+          "scavenger": 0,
+          "ravager": 3
+        },
+        "death_causes": {
+          "starvation": 0,
+          "predation": 3,
+          "age": 0,
+          "other": 3
+        },
+        "festival_successes": 0
+      },
+      {
+        "seed": 260002,
+        "final_population": {
+          "farmer": 12,
+          "cow": 27,
+          "nomad": 5,
+          "scavenger": 12,
+          "ravager": 0
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 0,
+          "nomad": 0,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 3,
+          "nomad": 1,
+          "scavenger": 0,
+          "ravager": 3
+        },
+        "death_causes": {
+          "starvation": 0,
+          "predation": 4,
+          "age": 0,
+          "other": 3
+        },
+        "festival_successes": 0
+      }
+    ]
+  },
+  "scripted_festivals_600": {
+    "mode": "scripted",
+    "ticks": 600,
+    "seeds": 3,
+    "initial_seed": 260000,
+    "reproduction_enabled": true,
+    "festival_enabled": true,
+    "mean_final_population": {
+      "farmer": 11.6667,
+      "cow": 60,
+      "nomad": 5,
+      "scavenger": 24,
+      "ravager": 0
+    },
+    "mean_births": {
+      "farmer": 0,
+      "cow": 32.3333,
+      "nomad": 0,
+      "scavenger": 12,
+      "ravager": 3
+    },
+    "mean_deaths": {
+      "farmer": 0.3333,
+      "cow": 2.3333,
+      "nomad": 1,
+      "scavenger": 0,
+      "ravager": 6
+    },
+    "mean_festival_successes": 17.6667,
+    "outcomes": [
+      {
+        "seed": 260000,
+        "final_population": {
+          "farmer": 11,
+          "cow": 60,
+          "nomad": 4,
+          "scavenger": 24,
+          "ravager": 0
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 32,
+          "nomad": 0,
+          "scavenger": 12,
+          "ravager": 3
+        },
+        "deaths": {
+          "farmer": 1,
+          "cow": 2,
+          "nomad": 2,
+          "scavenger": 0,
+          "ravager": 6
+        },
+        "death_causes": {
+          "starvation": 3,
+          "predation": 5,
+          "age": 0,
+          "other": 3
+        },
+        "festival_successes": 16
+      },
+      {
+        "seed": 260001,
+        "final_population": {
+          "farmer": 12,
+          "cow": 60,
+          "nomad": 5,
+          "scavenger": 24,
+          "ravager": 0
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 32,
+          "nomad": 0,
+          "scavenger": 12,
+          "ravager": 3
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 2,
+          "nomad": 1,
+          "scavenger": 0,
+          "ravager": 6
+        },
+        "death_causes": {
+          "starvation": 2,
+          "predation": 3,
+          "age": 0,
+          "other": 4
+        },
+        "festival_successes": 19
+      },
+      {
+        "seed": 260002,
+        "final_population": {
+          "farmer": 12,
+          "cow": 60,
+          "nomad": 6,
+          "scavenger": 24,
+          "ravager": 0
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 33,
+          "nomad": 0,
+          "scavenger": 12,
+          "ravager": 3
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 3,
+          "nomad": 0,
+          "scavenger": 0,
+          "ravager": 6
+        },
+        "death_causes": {
+          "starvation": 0,
+          "predation": 3,
+          "age": 0,
+          "other": 6
+        },
+        "festival_successes": 18
+      }
+    ]
+  },
+  "random_births_600": {
+    "mode": "random",
+    "ticks": 600,
+    "seeds": 3,
+    "initial_seed": 260000,
+    "reproduction_enabled": true,
+    "festival_enabled": false,
+    "mean_final_population": {
+      "farmer": 24,
+      "cow": 60,
+      "nomad": 7,
+      "scavenger": 12,
+      "ravager": 3
+    },
+    "mean_births": {
+      "farmer": 12.3333,
+      "cow": 30,
+      "nomad": 1,
+      "scavenger": 0,
+      "ravager": 0
+    },
+    "mean_deaths": {
+      "farmer": 0.3333,
+      "cow": 0,
+      "nomad": 0,
+      "scavenger": 0,
+      "ravager": 0
+    },
+    "mean_festival_successes": 0,
+    "outcomes": [
+      {
+        "seed": 260000,
+        "final_population": {
+          "farmer": 24,
+          "cow": 60,
+          "nomad": 7,
+          "scavenger": 12,
+          "ravager": 3
+        },
+        "births": {
+          "farmer": 13,
+          "cow": 30,
+          "nomad": 1,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "deaths": {
+          "farmer": 1,
+          "cow": 0,
+          "nomad": 0,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "death_causes": {
+          "starvation": 1,
+          "predation": 0,
+          "age": 0,
+          "other": 0
+        },
+        "festival_successes": 0
+      },
+      {
+        "seed": 260001,
+        "final_population": {
+          "farmer": 24,
+          "cow": 60,
+          "nomad": 7,
+          "scavenger": 12,
+          "ravager": 3
+        },
+        "births": {
+          "farmer": 12,
+          "cow": 30,
+          "nomad": 1,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 0,
+          "nomad": 0,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "death_causes": {
+          "starvation": 0,
+          "predation": 0,
+          "age": 0,
+          "other": 0
+        },
+        "festival_successes": 0
+      },
+      {
+        "seed": 260002,
+        "final_population": {
+          "farmer": 24,
+          "cow": 60,
+          "nomad": 7,
+          "scavenger": 12,
+          "ravager": 3
+        },
+        "births": {
+          "farmer": 12,
+          "cow": 30,
+          "nomad": 1,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "deaths": {
+          "farmer": 0,
+          "cow": 0,
+          "nomad": 0,
+          "scavenger": 0,
+          "ravager": 0
+        },
+        "death_causes": {
+          "starvation": 0,
+          "predation": 0,
+          "age": 0,
+          "other": 0
+        },
+        "festival_successes": 0
+      }
+    ]
+  },
+  "scripted_festivals_1200": {
+    "mode": "scripted",
+    "ticks": 1200,
+    "seeds": 2,
+    "initial_seed": 270000,
+    "reproduction_enabled": true,
+    "festival_enabled": true,
+    "mean_final_population": {
+      "farmer": 6.5,
+      "cow": 31.5,
+      "nomad": 5,
+      "scavenger": 24,
+      "ravager": 0
+    },
+    "mean_births": {
+      "farmer": 0,
+      "cow": 64,
+      "nomad": 0,
+      "scavenger": 36,
+      "ravager": 2.5
+    },
+    "mean_deaths": {
+      "farmer": 5.5,
+      "cow": 62.5,
+      "nomad": 1,
+      "scavenger": 24,
+      "ravager": 5.5
+    },
+    "mean_festival_successes": 29.5,
+    "outcomes": [
+      {
+        "seed": 270000,
+        "final_population": {
+          "farmer": 7,
+          "cow": 31,
+          "nomad": 5,
+          "scavenger": 24,
+          "ravager": 0
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 64,
+          "nomad": 0,
+          "scavenger": 36,
+          "ravager": 3
+        },
+        "deaths": {
+          "farmer": 5,
+          "cow": 63,
+          "nomad": 1,
+          "scavenger": 24,
+          "ravager": 6
+        },
+        "death_causes": {
+          "starvation": 6,
+          "predation": 4,
+          "age": 84,
+          "other": 5
+        },
+        "festival_successes": 32
+      },
+      {
+        "seed": 270001,
+        "final_population": {
+          "farmer": 6,
+          "cow": 32,
+          "nomad": 5,
+          "scavenger": 24,
+          "ravager": 0
+        },
+        "births": {
+          "farmer": 0,
+          "cow": 64,
+          "nomad": 0,
+          "scavenger": 36,
+          "ravager": 2
+        },
+        "deaths": {
+          "farmer": 6,
+          "cow": 62,
+          "nomad": 1,
+          "scavenger": 24,
+          "ravager": 5
+        },
+        "death_causes": {
+          "starvation": 8,
+          "predation": 3,
+          "age": 84,
+          "other": 3
+        },
+        "festival_successes": 27
+      }
+    ]
+  }
+}

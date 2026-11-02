@@ -210,3 +210,17 @@ a no-charge ablation produced **0%** kills. A separately trained satiated-rest
 policy saved energy through hibernation. The learned policies have **not** yet
 mastered safe carcass relocation or the complete multi-stage hunting cycle.
 See [M6 experiment details and caveats](docs/M6_RAVAGER_INTELLIGENCE.md).
+
+## M9: Population dynamics and long-horizon evaluation
+
+**Opt-in, implemented:** mature adults can reproduce at an energy cost, creating juveniles with inherited group/home identity and permanent, unique IDs. Age-related mortality, species caps, and finite birth budgets prevent runaway simulation size; ravagers mature and reproduce more slowly. Pre-M9 checkpoint observation/action schemas are unchanged.
+
+```bash
+qox run --reproduction --ticks 800 --seed 42 --mode scripted --trace runs/m9.json
+qox replay --trace runs/m9.json
+qox population-study --ticks 1200 --seeds 5 --seed 260000 --mode scripted --festivals --report runs/m9.json
+qox population-study --ticks 1200 --seeds 5 --seed 260000 --mode scripted --festivals --without-births --report runs/m9_without_births.json
+```
+
+The counterfactual keeps adult maturity and aging enabled in **both** conditions. `population-study --mode learned` loads frozen checkpoint(s) for selected species and keeps omitted species scripted; consult [`docs/M9_POPULATION_DYNAMICS.md`](docs/M9_POPULATION_DYNAMICS.md) for exact options and limitations. M9 has **not** demonstrated a permanently stable or independently learned ecosystem.
+

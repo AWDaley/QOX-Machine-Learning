@@ -23,6 +23,7 @@ def parser() -> argparse.ArgumentParser:
     simulate.add_argument("--trace", type=Path)
     simulate.add_argument("--checkpoint", type=Path)
     simulate.add_argument("--festivals", action="store_true", help="Enable M8 festivals")
+    simulate.add_argument("--reproduction", action="store_true", help="Enable M9 births and juveniles")
     simulate.add_argument("--cow-checkpoint", type=Path,
                           help="Second checkpoint for learned-herd mode")
     check = sub.add_parser("replay", help="Verify deterministic action trace")
@@ -36,8 +37,27 @@ def parser() -> argparse.ArgumentParser:
     view.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd", "learned-ravager", "learned-scavenger", "learned-festival"), default="scripted")
     view.add_argument("--checkpoint", type=Path)
     view.add_argument("--festivals", action="store_true", help="Enable M8 festivals")
+    view.add_argument("--reproduction", action="store_true", help="Enable M9 births and juveniles")
     view.add_argument("--cow-checkpoint", type=Path,
                       help="Second checkpoint for learned-herd mode")
+    study = sub.add_parser("population-study", help="M9: frozen-policy long-horizon multi-seed ecology evaluation")
+    study.add_argument("--ticks", type=int, default=600)
+    study.add_argument("--seeds", type=int, default=3)
+    study.add_argument("--seed", type=int, default=200000)
+    study.add_argument("--sample-every", type=int, default=60)
+    study.add_argument("--mode", choices=("scripted", "random", "idle", "learned"),
+                       default="scripted")
+    study.add_argument("--config", type=Path)
+    study.add_argument("--festivals", action="store_true")
+    study.add_argument("--without-births", action="store_true",
+                       help="Counterfactual: same settings, reproduction disabled")
+    study.add_argument("--farmer-checkpoint", type=Path)
+    study.add_argument("--cow-checkpoint", type=Path)
+    study.add_argument("--nomad-checkpoint", type=Path)
+    study.add_argument("--scavenger-checkpoint", type=Path)
+    study.add_argument("--ravager-checkpoint", type=Path)
+    study.add_argument("--festival-checkpoint", type=Path)
+    study.add_argument("--report", type=Path, default=Path("runs/m9_population_study.json"))
     train = sub.add_parser("train-cow", help="Train a shared cow policy with masked PPO")
     train.add_argument("--steps", type=int, default=8192)
     train.add_argument("--seed", type=int, default=42)
@@ -219,6 +239,27 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "population-study":
+        from .evaluation.population import run_study
+        cfg = SimulationConfig.from_toml(args.config) if args.config else SimulationConfig()
+        cfg = replace(cfg, population_dynamics_enabled=True,
+                      reproduction_enabled=not args.without_births,
+                      festival_enabled=cfg.festival_enabled or args.festivals)
+        checkpoint_paths = {species: getattr(args, f"{species}_checkpoint")
+                            for species in ("farmer", "cow", "nomad", "scavenger", "ravager")}
+        result = run_study(cfg, ticks=args.ticks, seeds=args.seeds,
+                           initial_seed=args.seed, sample_every=args.sample_every,
+                           mode=args.mode, checkpoints=checkpoint_paths,
+                           festival_checkpoint=args.festival_checkpoint)
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        print(json.dumps({"mode": result["mode"], "mean_final_population":
+                          result["mean_final_population"],
+                          "mean_births": result["mean_births"],
+                          "mean_deaths": result["mean_deaths"],
+                          "mean_festival_successes": result["mean_festival_successes"],
+                          "report": str(args.report)}, indent=2))
+        return 0
     if args.command == "festival-demo":
         from .agents import scripted_actions
         from .envs.core import QoxCoreEnv
@@ -459,6 +500,9 @@ def main(argv: list[str] | None = None) -> int:
         config = replace(config, seed=args.seed)
     if args.festivals or args.mode == "learned-festival":
         config = replace(config, festival_enabled=True)
+    if getattr(args, "reproduction", False):
+        config = replace(config, population_dynamics_enabled=True,
+                         reproduction_enabled=True)
     if args.command == "viewer":
         from .viewer import display
         display(config, mode=args.mode, checkpoint=args.checkpoint,

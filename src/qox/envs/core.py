@@ -21,10 +21,10 @@ from ..world import World
 
 
 class QoxCoreEnv:
-    """Simultaneous multi-agent interface with stable names for initial actors.
+    """Simultaneous interface with bounded, never-recycled newborn slots.
 
-    M9 will add bounded possible-agent slots for births. Until then, actors can
-    die but no new actors are created during an episode.
+    Birth slots belong to possible_agents from reset, even before they become
+    active. Each living newborn receives exactly one identity for its lifetime.
     """
 
     def __init__(self, config: SimulationConfig | None = None, max_steps: int = 128,
@@ -151,9 +151,15 @@ class QoxCoreEnv:
             self._scenario_setup(seed)
         self.reached_goal_ids = set()
         self.signal_committed = False
-        self.possible_agents = [get_agent_name(a) for a in self.world.actors.values()]
+        initial = [get_agent_name(a) for a in self.world.actors.values()]
+        slots = ([f"{species.value}_birth_{i:04d}"
+                  for species in Species
+                  for i in range(1, self.world.config.births_per_species_limit + 1)]
+                 if self.world.config.reproduction_enabled else [])
+        self.possible_agents = initial + slots
         self.name_to_id = {get_agent_name(a): aid for aid, a in self.world.actors.items()}
-        self.agents = list(self.possible_agents)
+        self.birth_slot_indices = {species: 0 for species in Species}
+        self.agents = initial
         return (self._observations(), {name: {} for name in self.agents})
 
     def _scenario_setup(self, seed: int) -> None:
@@ -847,12 +853,34 @@ class QoxCoreEnv:
                     value = 0.025 * (actor.energy - 50.0)
                     rewards[name] += value
                     components[name]["final_energy"] += value
-        self.agents = [name for name in previous if not (terminations[name]
-                                                         or truncations[name])]
+        # Add births *after* the previous actors' reward/terminal transition.
+        # IDs never recycle, and slots are predeclared in possible_agents.
+        newcomers = []
+        mapped_ids = set(self.name_to_id.values())
+        if not (self.world.tick >= self.max_steps):
+            for aid in sorted(set(self.world.actors) - mapped_ids):
+                newborn = self.world.actors[aid]
+                species = newborn.species
+                self.birth_slot_indices[species] += 1
+                index = self.birth_slot_indices[species]
+                name = f"{species.value}_birth_{index:04d}"
+                if name not in self.possible_agents:
+                    raise RuntimeError("Birth exceeded predeclared agent capacity")
+                self.name_to_id[name] = aid
+                newcomers.append(name)
+        self.agents = ([name for name in previous if not (terminations[name]
+                                                         or truncations[name])] + newcomers)
         infos = {name: {"invalid_action": invalid.get(name, False),
                         "reward_components": dict(components[name]),
                         "world_tick": self.world.tick}
                  for name in previous}
+        # A newborn observes the result of its birth tick and may first act on
+        # the next tick. No policy receives an immediate birth reward.
+        for name in newcomers:
+            rewards[name] = 0.0
+            terminations[name] = False
+            truncations[name] = False
+            infos[name] = {"newborn": True, "world_tick": self.world.tick}
         return self._observations(), rewards, terminations, truncations, infos
 
     def close(self) -> None:

@@ -12,6 +12,8 @@ from .actions import Action, Kind
 from .config import SimulationConfig
 from .entities import Actor, CallSignal, Carcass, Event, Settlement, Species, Tile
 from .grid import Grid
+from .population import (LIFESPAN, birth_step, mature_age,
+                         population_caps, is_juvenile)
 from .festivals import (Camp, Festival, FestivalKind, FestivalResult,
                         advance as advance_festivals, can_start as can_start_festival,
                         contribution_target, site_for as festival_site,
@@ -31,6 +33,7 @@ class World:
         self.last_events: list[Event] = []
         self.next_id = 1
         self.next_carcass_id = 1
+        self.birth_totals = {species: 0 for species in Species}
         tiles = []
         for _ in range(self.config.width * self.config.height):
             fertility = self.rng.uniform(0.3, 0.95)
@@ -89,6 +92,10 @@ class World:
                               home_id=home.id if species == Species.FARMER else None,
                               band_id=1 + i % 2 if species == Species.NOMAD else None,
                               carried_food=2.0 if species == Species.FARMER else 0.0)
+                if (self.config.population_dynamics_enabled or
+                        self.config.reproduction_enabled):
+                    # Starting residents are adults; later births enter as juveniles.
+                    actor.age = mature_age(species)
                 self.actors[actor.id] = actor
                 self.next_id += 1
 
@@ -114,6 +121,8 @@ class World:
         for aid in sorted(self.actors):
             actor = self.actors[aid]
             action = orders.get(aid, Action())
+            if is_juvenile(self, actor) and action.kind == Kind.DASH:
+                continue
             if action.kind not in (Kind.MOVE, Kind.DASH, Kind.SNEAK):
                 continue
             is_dash = action.kind == Kind.DASH
@@ -283,6 +292,8 @@ class World:
         requests: dict[tuple[str, int], list[tuple[int, FestivalKind]]] = defaultdict(list)
         for aid in sorted(orders):
             actor = self.actors[aid]
+            if is_juvenile(self, actor):
+                continue
             action = orders[aid]
             mode = modes.get(action.kind)
             if mode is None or actor.hibernating or actor.charge_windup or actor.charge_recovery:
@@ -310,6 +321,14 @@ class World:
                 self.emit("wake", actor.id)
             return
         if actor.charge_windup or actor.charge_recovery:
+            return
+        # Juveniles can eat, graze, travel and hide, but have not developed
+        # milking/attack/charge/call skills. Keep old action schemas stable.
+        if is_juvenile(self, actor) and kind in (
+                Kind.MILK, Kind.ATTACK, Kind.CHARGE, Kind.FRIENDLY_CALL,
+                Kind.SCARY_CALL, Kind.START_FARMER_FESTIVAL,
+                Kind.START_NOMAD_FESTIVAL, Kind.START_COMBINED_FESTIVAL,
+                Kind.CONTRIBUTE_FESTIVAL):
             return
         # Interior shelter excludes all field work, festival participation and attacks.
         if actor.sheltered and kind not in (Kind.REST, Kind.EAT, Kind.DEPOSIT):
@@ -384,7 +403,9 @@ class World:
                         tile.planted = False
                 actor.energy = min(100.0, actor.energy + amount * 2.4)
                 actor.dung_pending += amount * 0.3
-                actor.milk = min(10.0, actor.milk + amount * 0.16)
+                # Juvenile cattle eat and grow but do not yet produce milk.
+                if not is_juvenile(self, actor):
+                    actor.milk = min(10.0, actor.milk + amount * 0.16)
                 self.emit("graze", actor.id, amount, source)
         elif kind == Kind.PLANT and actor.species == Species.FARMER:
             if not tile.planted and tile.fertility >= 0.2 and actor.carried_food >= 0.3:
@@ -581,6 +602,9 @@ class World:
             actor.charge_recovery = max(0, actor.charge_recovery - 1)
             actor.satiety = max(0.0, actor.satiety - 0.005)
             actor.age += 1
+            if ((self.config.population_dynamics_enabled or self.config.reproduction_enabled)
+                    and actor.age > LIFESPAN[actor.species]):
+                actor.health = max(0.0, actor.health - 0.65)
             metabolic = (self.config.ravager_hibernate_metabolism
                          if actor.hibernating and actor.species == Species.RAVAGER
                          else costs[actor.species])
@@ -597,6 +621,13 @@ class World:
                 self.carcasses[carcass.id] = carcass
                 self.next_carcass_id += 1
                 self.emit("death", aid, detail=actor.species.value)
+                if self.config.population_dynamics_enabled or self.config.reproduction_enabled:
+                    attacked = any(e.kind in ("attack", "charge_hit") and
+                                   e.detail == f"target:{aid}" for e in self.last_events)
+                    cause = "predation" if attacked else (
+                        "starvation" if actor.energy <= 0 else
+                        "age" if actor.age > LIFESPAN[actor.species] else "other")
+                    self.emit("death_cause", aid, detail=cause)
                 del self.actors[aid]
 
     def step(self, orders: dict[int, Action] | None = None) -> None:
@@ -628,13 +659,25 @@ class World:
         self._metabolism()
         if self.config.festival_enabled:
             advance_festivals(self)
+        if self.config.reproduction_enabled and self.tick % self.config.reproduction_interval == 0:
+            birth_step(self)
         self.check_invariants()
 
     def check_invariants(self) -> None:
         cfg = self.config
         outside = [a.position for a in self.actors.values() if not a.sheltered]
         assert len(set(outside)) == len(outside)
+        if cfg.reproduction_enabled:
+            caps = population_caps(cfg)
+            counts = Counter(a.species for a in self.actors.values())
+            assert all(counts[species] <= caps[species] for species in Species)
+            assert all(0 <= self.birth_totals[species] <= cfg.births_per_species_limit
+                       for species in Species)
+            assert self.next_id > max(self.actors, default=0)
         for actor in self.actors.values():
+            assert actor.age >= 0 and actor.last_birth_tick <= self.tick
+            if actor.parent_id is not None:
+                assert actor.parent_id < actor.id
             if actor.sheltered:
                 home = self.home(actor)
                 assert actor.species == Species.FARMER and home is not None
@@ -683,11 +726,22 @@ class World:
                    and sig.radius >= 1 and sig.tick <= self.tick for sig in self.calls)
 
     def snapshot(self) -> dict:
-        return {
+        # Legacy snapshots deliberately retain their M8 shape when opt-in
+        # reproduction is disabled, so previously saved action traces replay.
+        config = self.config.as_dict()
+        actors = [asdict(self.actors[aid]) for aid in sorted(self.actors)]
+        if not (self.config.population_dynamics_enabled or self.config.reproduction_enabled):
+            from .population import REPRO_CONFIG_FIELDS
+            for field in REPRO_CONFIG_FIELDS:
+                config.pop(field)
+            for actor in actors:
+                actor.pop("parent_id")
+                actor.pop("last_birth_tick")
+        result = {
             "tick": self.tick,
-            "config": self.config.as_dict(),
+            "config": config,
             "tiles": [asdict(t) for t in self.grid.tiles],
-            "actors": [asdict(self.actors[aid]) for aid in sorted(self.actors)],
+            "actors": actors,
             "settlements": [asdict(s) for s in self.settlements],
             "carcasses": [asdict(self.carcasses[cid]) for cid in sorted(self.carcasses)],
             "calls": [asdict(signal) for signal in self.calls],
@@ -698,6 +752,11 @@ class World:
             "next_festival_id": self.next_festival_id,
             "herd_goal": self.herd_goal,
         }
+        if self.config.population_dynamics_enabled or self.config.reproduction_enabled:
+            result["next_id"] = self.next_id
+            result["birth_totals"] = {species.value: self.birth_totals[species]
+                                      for species in Species}
+        return result
 
     def state_hash(self) -> str:
         payload = json.dumps(self.snapshot(), sort_keys=True, separators=(",", ":"))
@@ -711,6 +770,11 @@ class World:
             "seed": self.config.seed,
             "state_hash": self.state_hash(),
             "population": {s.value: counts[s.value] for s in Species},
+            "births": {s.value: self.birth_totals[s] for s in Species},
+            "juveniles": {s.value: sum(a.species == s and is_juvenile(self, a)
+                                       for a in self.actors.values()) for s in Species},
+            "deaths": {s.value: sum(e.kind == "death" and e.detail == s.value
+                                    for e in self.events) for s in Species},
             "grass": round(sum(t.grass for t in self.grid.tiles), 3),
             "crops": round(sum(t.crop for t in self.grid.tiles), 3),
             "waste": round(sum(t.waste for t in self.grid.tiles), 3),
