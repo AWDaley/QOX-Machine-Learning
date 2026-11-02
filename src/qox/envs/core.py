@@ -10,6 +10,8 @@ from collections import defaultdict
 from dataclasses import replace
 import random
 
+import numpy as np
+
 from ..actions import Action, Kind
 from ..agents import scripted_actions
 from ..config import SimulationConfig
