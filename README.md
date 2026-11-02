@@ -2,11 +2,11 @@
 
 **Current status: M0–M9 implemented (deterministic ecosystem, species-specific PPO, learned-herd experiments, ravager intelligence, scavenger nutrient competition, and three festival types).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
 
-## M12 — Confirmed ecosystem events and action feedback
+## M12 — Readable, confirmed ecosystem events
 
-The M11 pixel-art viewer now draws **confirmed** action effects instead of assuming that requested actions succeeded. It shows ravager charge wind-ups, hits and misses, distinct nomad calls, harvest and fertilizer sparks, carcass handling, births, deaths and festivals. A bounded recent-event feed can focus the camera on specific incidents. The actor inspector reports **No confirmed outcome** when a requested action has no matching world event. These features never change physics, RNG, neural weights or deterministic replay.
+The enlarged pixel-art viewer now shows **confirmed** action effects rather than assuming every requested action succeeded. It adds visible charge wind-ups, impacts and misses; distinct nomad cattle-call signals; harvest and fertilizer sparks; carcass handling, births, deaths, and festival outcomes. A bounded, clickable recent-event feed appears over the map. The selected actor inspector distinguishes a confirmed action from **No confirmed outcome**. These overlays never alter simulation physics, neural policy weights, or seeded replay.
 
-New controls: **E** toggle feed, **T** switch major/all events, **V** toggle effects, **H** toggle corner badges. Click an event row to focus its location. See [M12 visual event documentation](docs/M12_VISUAL_EVENTS.md).
+New controls: **E** events panel, **T** major/all event filter, **V** event effects, **H** actor corner status badges. Click a feed row to focus the location. Read [M12 visual events implementation](docs/M12_VISUAL_EVENTS.md) for rules, tests, and limitations.
 
 ## M8 — Festivals and prosperity
 
@@ -241,3 +241,32 @@ QOX now has a **launcher with buttons**, built as a portable Windows `QOX.exe` u
 
 **Important:** Fresh networks start with random weights. The viewer does not automatically train them; use **Train selected species** before saving the trained models. Saves contain neural weights, not the world state. Festival initiation uses a clearly labelled scripted helper until the standard five networks support festival decisions.
 
+
+## M13 — Live analytics, neural inspection, and trace replay
+
+The M13 observer adds **three viewer sidebar tabs**: `1` actors, `2` neural inspection,
+`3` ecosystem graphs. Press `I` or `G` for quick neural/chart toggles, and use
+`J/K` to scroll the selected actor's *pre-action* local observation features.
+The neural panel shows the highest-probability **legal** actions, the requested
+move, and whether the world confirmed an outcome. It does not reveal inaccessible
+information or infer a neural model's intentions.
+
+Press `B` to cycle species-specific event feeds or `Y` to restrict events to
+one selected actor. Press `X` in the viewer to export bounded population and
+resource telemetry as JSON/CSV and the confirmed event history as JSON under
+`~/Documents/QOX/`.
+
+```powershell
+# Record deterministic world actions for later exploration
+qox run --ticks 250 --seed 42 --mode scripted --reproduction --festivals --trace runs/explore.json
+qox replay-viewer --trace runs/explore.json
+
+# Alternatively record directly inside the viewer
+qox viewer --seed 42 --mode scripted --record-trace runs/viewer-trace.json
+```
+
+Replay supports pause, stepping, 25-tick jumps, major-event navigation, and
+clickable timeline seeking; each processed tick is verified against the recorded
+hash. The desktop **File** menu adds trace recording and reopening without a
+command line. Recorded traces are not world saves; `.qox` still stores neural
+networks only. See [M13 observability and replay guide](docs/M13_OBSERVABILITY_AND_REPLAY.md).

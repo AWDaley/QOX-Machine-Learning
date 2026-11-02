@@ -28,6 +28,8 @@ def parser() -> argparse.ArgumentParser:
                           help="Second checkpoint for learned-herd mode")
     check = sub.add_parser("replay", help="Verify deterministic action trace")
     check.add_argument("--trace", type=Path, required=True)
+    replay_viewer = sub.add_parser("replay-viewer", help="Graphical, seekable trace replay")
+    replay_viewer.add_argument("--trace", type=Path, required=True)
     view = sub.add_parser("viewer", help="View the world in Pygame (optional extra)")
     view.add_argument("--seed", type=int, default=42)
     view.add_argument("--config", type=Path)
@@ -40,6 +42,8 @@ def parser() -> argparse.ArgumentParser:
     view.add_argument("--reproduction", action="store_true", help="Enable M9 births and juveniles")
     view.add_argument("--cow-checkpoint", type=Path,
                       help="Second checkpoint for learned-herd mode")
+    view.add_argument("--record-trace", type=Path,
+                      help="Record viewer actions for later replay-viewer inspection")
     study = sub.add_parser("population-study", help="M9: frozen-policy long-horizon multi-seed ecology evaluation")
     study.add_argument("--ticks", type=int, default=600)
     study.add_argument("--seeds", type=int, default=3)
@@ -495,6 +499,11 @@ def main(argv: list[str] | None = None) -> int:
         world = replay(Trace.load(args.trace))
         print(f"Replay OK: {world.tick} ticks; hash={world.state_hash()[:16]}")
         return 0
+    if args.command == "replay-viewer":
+        from .viewer import display
+        trace = Trace.load(args.trace)
+        display(SimulationConfig(**trace.config), replay_trace=trace)
+        return 0
     config = SimulationConfig.from_toml(args.config) if args.config else SimulationConfig()
     if args.seed is not None:
         config = replace(config, seed=args.seed)
@@ -507,7 +516,8 @@ def main(argv: list[str] | None = None) -> int:
         from .viewer import display
         display(config, mode=args.mode, checkpoint=args.checkpoint,
                 cow_checkpoint=args.cow_checkpoint,
-                scenario=args.festival_scenario)
+                scenario=args.festival_scenario,
+                record_trace=args.record_trace)
         return 0
     world, trace = run(config, ticks=args.ticks, mode=args.mode,
                        record=args.trace is not None, checkpoint=args.checkpoint,

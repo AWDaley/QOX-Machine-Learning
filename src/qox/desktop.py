@@ -48,11 +48,45 @@ class QoxDesktop:
         self.reproduction_var = tk.BooleanVar(value=True)
         self.festivals_var = tk.BooleanVar(value=True)
         self.stochastic_var = tk.BooleanVar(value=True)
+        self.record_next_var = tk.BooleanVar(value=False)
+        self._setup_file_menu()
         self._configure_style()
         self._draw()
         self._refresh_species()
         self.root.after(150, self._poll)
         self.root.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _setup_file_menu(self) -> None:
+        """Replay and recording controls without crowding the main launcher."""
+        menu = tk.Menu(self.root)
+        file_menu = tk.Menu(menu, tearoff=False)
+        file_menu.add_command(label="Open recorded world replay...", command=self._open_replay)
+        file_menu.add_checkbutton(label="Record next simulation as trace",
+                                  variable=self.record_next_var)
+        menu.add_cascade(label="File", menu=file_menu)
+        self.root.configure(menu=menu)
+
+    def _open_replay(self):
+        if self.busy:
+            return
+        filename = filedialog.askopenfilename(parent=self.root,
+                                              title="Open a QOX action trace",
+                                              filetypes=[("QOX action traces", "*.json"),
+                                                         ("All files", "*.*")])
+        if not filename:
+            return
+        try:
+            from .trace import Trace
+            from .viewer import display
+            trace = Trace.load(filename)
+            self.root.withdraw()
+            try:
+                display(SimulationConfig(**trace.config), replay_trace=trace)
+                self.status_var.set(f"Replay closed: {Path(filename).name}")
+            finally:
+                self.root.deiconify()
+        except Exception as exc:
+            messagebox.showerror("Replay error", str(exc), parent=self.root)
 
     def _configure_style(self) -> None:
         style = ttk.Style(self.root)
@@ -240,9 +274,18 @@ class QoxDesktop:
         self.root.withdraw()
         try:
             from .viewer import display
+            trace_path = None
+            if self.record_next_var.get():
+                folder = Path.home() / "Documents" / "QOX"
+                folder.mkdir(parents=True, exist_ok=True)
+                trace_path = folder / f"trace_seed{config.seed}_{uuid4().hex[:8]}.json"
             display(config, mode="scripted" if scripted else "multi-learned",
-                    active_controller=controller)
-            self.status_var.set("Simulation closed. Networks unchanged; train to update weights.")
+                    active_controller=controller,
+                    record_trace=str(trace_path) if trace_path is not None else None)
+            self.status_var.set(
+                f"Saved action trace to {trace_path}" if trace_path is not None else
+                "Simulation closed. Networks unchanged; train to update weights.")
+            self.record_next_var.set(False)
         except Exception as exc:
             messagebox.showerror("Simulation error", str(exc), parent=self.root)
         finally:
