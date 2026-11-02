@@ -166,7 +166,7 @@ def compare_checkpoints(species: Species, active: Path, candidate: Path, *,
     key, row_key, label = METRICS[species][scenario]
     old_rows = [float(r[row_key]) for r in existing["results"]]
     new_rows = [float(r[row_key]) for r in proposed["results"]]
-    paired = [b - a for a, b in zip(old_rows, new_rows)]
+    paired = [b - a for a, b in zip(old_rows, new_rows, strict=True)]
     return {"species": species.value, "scenario": scenario, "metric": key,
             "metric_label": label, "seed_start": heldout, "episodes": episodes,
             "active": float(existing[key]), "candidate": float(proposed[key]),
