@@ -16,12 +16,13 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-from ..actions import Kind
+from ..actions import Action, Kind
 from ..agents import scripted_actions
 from ..entities import Species
 from ..envs.core import QoxCoreEnv
 from ..perception import (ACTIONS, NOMAD_OBSERVATION_VERSION,
-                          features_for, observation_size)
+                          NOMAD_RELATIONAL_OBSERVATION_VERSION, features_for,
+                          observation_size)
 
 
 def action_names() -> tuple[str, ...]:
@@ -30,10 +31,11 @@ def action_names() -> tuple[str, ...]:
 
 
 class NomadPolicy(nn.Module):
-    def __init__(self, hidden: int = 64):
+    def __init__(self, hidden: int = 64, *, nomad_v2: bool = False):
         super().__init__()
+        self.nomad_v2 = nomad_v2
         self.encoder = nn.Sequential(
-            nn.Linear(observation_size(Species.NOMAD), hidden), nn.Tanh(),
+            nn.Linear(observation_size(Species.NOMAD, nomad_v2=nomad_v2), hidden), nn.Tanh(),
             nn.Linear(hidden, hidden), nn.Tanh())
         self.actor = nn.Linear(hidden, len(ACTIONS[Species.NOMAD]))
         self.critic = nn.Linear(hidden, 1)
@@ -60,9 +62,10 @@ class NomadTrainOptions:
     clip: float = 0.2
     entropy: float = 0.015
     hidden: int = 64
+    nomad_v2: bool = False
 
     def __post_init__(self):
-        if self.scenario not in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+        if self.scenario not in ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed"):
             raise ValueError("Unknown nomad training scenario")
         if min(self.steps, self.max_steps, self.worlds, self.rollout,
                self.epochs, self.minibatch, self.hidden) <= 0:
@@ -78,16 +81,24 @@ def _nomad(env: QoxCoreEnv) -> str:
     return next(name for name in env.possible_agents if name.startswith("nomad_"))
 
 
-def train_nomad(options: NomadTrainOptions, output: str | Path) -> dict:
+def train_nomad(options: NomadTrainOptions, output: str | Path,
+                init_checkpoint: str | Path | None = None) -> dict:
     """Train a role-shared nomad against responsive scripted cattle and ravager."""
     torch.set_num_threads(1)
     torch.manual_seed(options.seed)
     np.random.seed(options.seed)
     random.seed(options.seed)
-    model = NomadPolicy(options.hidden)
+    model = (load_nomad(init_checkpoint) if init_checkpoint is not None else
+             NomadPolicy(options.hidden, nomad_v2=options.nomad_v2))
+    if model.nomad_v2 != options.nomad_v2:
+        raise ValueError("Initial nomad checkpoint observation version mismatch")
+    if model.encoder[0].out_features != options.hidden:
+        raise ValueError("Initial nomad checkpoint hidden size does not match requested size")
+    model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=options.lr, eps=1e-5)
     envs = [QoxCoreEnv(scenario=options.scenario, max_steps=options.max_steps,
-                       scripted_others=True, cow_calls=True)
+                       scripted_others=True, cow_calls=True,
+                       nomad_v2=options.nomad_v2)
             for _ in range(options.worlds)]
     names = [_nomad(env) for env in envs]
     episode_counts = [0] * options.worlds
@@ -181,11 +192,15 @@ def train_nomad(options: NomadTrainOptions, output: str | Path) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"policy_state": model.state_dict(), "optimizer_state": optimizer.state_dict(),
                 "model_hidden": options.hidden, "species": "nomad",
-                "obs_version": NOMAD_OBSERVATION_VERSION,
-                "observation_features": features_for(Species.NOMAD),
+                "obs_version": (NOMAD_RELATIONAL_OBSERVATION_VERSION
+                                if options.nomad_v2 else NOMAD_OBSERVATION_VERSION),
+                "observation_features": features_for(Species.NOMAD,
+                                                      nomad_v2=options.nomad_v2),
                 "actions": action_names(), "options": asdict(options),
-                "completed_steps": steps}, output)
-    report = {"checkpoint": str(output), "nomad_steps": steps,
+                "completed_steps": steps,
+                "init_checkpoint": str(init_checkpoint) if init_checkpoint else None}, output)
+    report = {"checkpoint": str(output), "initial_checkpoint": str(init_checkpoint)
+              if init_checkpoint is not None else None, "nomad_steps": steps,
               "completed_episodes": len(completed_returns),
               "recent_returns": completed_returns[-30:], "history": history}
     output.with_suffix(".metrics.json").write_text(json.dumps(report, indent=2),
@@ -195,12 +210,16 @@ def train_nomad(options: NomadTrainOptions, output: str | Path) -> dict:
 
 def load_nomad(path: str | Path) -> NomadPolicy:
     data = torch.load(path, map_location="cpu", weights_only=True)
+    version = data.get("obs_version")
+    if version not in (NOMAD_OBSERVATION_VERSION, NOMAD_RELATIONAL_OBSERVATION_VERSION):
+        raise ValueError("Nomad checkpoint observation version mismatch")
+    nomad_v2 = version == NOMAD_RELATIONAL_OBSERVATION_VERSION
     if (data.get("species") != "nomad"
-            or data.get("obs_version") != NOMAD_OBSERVATION_VERSION
-            or tuple(data.get("observation_features", ())) != features_for(Species.NOMAD)
+            or tuple(data.get("observation_features", ())) != features_for(
+                Species.NOMAD, nomad_v2=nomad_v2)
             or tuple(data.get("actions", ())) != action_names()):
         raise ValueError("Nomad checkpoint schema mismatch")
-    model = NomadPolicy(int(data["model_hidden"]))
+    model = NomadPolicy(int(data["model_hidden"]), nomad_v2=nomad_v2)
     model.load_state_dict(data["policy_state"])
     model.eval()
     return model
@@ -208,21 +227,39 @@ def load_nomad(path: str | Path) -> NomadPolicy:
 
 def evaluate_nomad(checkpoint: str | Path | None = None, *, episodes: int = 12,
                    seed: int = 100_000, scenario: str = "nomad_herd",
-                   max_steps: int = 96, mode: str = "policy") -> dict:
+                   max_steps: int = 96, mode: str = "policy",
+                   cow_checkpoint: str | Path | None = None) -> dict:
+    """Evaluate a *frozen* nomad policy with paired call/no-call/flip controls.
+
+    ``policy_greedy`` means deterministic actor actions; stochastic ``policy``
+    and ``random`` use their own RNG independent of world physics. In the
+    counterfactual modes, the selected friendly/scary action is swapped before
+    execution without changing the goal or positions.
+    """
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes and max_steps must be positive")
-    if scenario not in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+    if scenario not in ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed"):
         raise ValueError("Unknown evaluation scenario")
-    if mode not in ("policy", "policy_greedy", "policy_nocalls", "random", "scripted", "scripted_nocalls"):
+    modes = ("policy", "policy_greedy", "policy_nocalls", "policy_greedy_nocalls",
+             "policy_greedy_flipped", "random", "scripted", "scripted_nocalls",
+             "scripted_flipped")
+    if mode not in modes:
         raise ValueError("Unknown evaluation mode")
     if mode.startswith("policy") and checkpoint is None:
         raise ValueError("Policy evaluation requires a checkpoint")
     model = load_nomad(checkpoint) if mode.startswith("policy") else None
+    cow_model = None
+    if cow_checkpoint is not None:
+        from .cow_ppo import load_cow
+        cow_model = load_cow(cow_checkpoint)
+        if not cow_model.cow_calls:
+            raise ValueError("Herd evaluation needs a call-aware 66-feature cow checkpoint")
     chooser = np.random.default_rng(seed)
     results = []
     for episode in range(episodes):
         env = QoxCoreEnv(scenario=scenario, max_steps=max_steps, scripted_others=True,
-                         cow_calls=True, allow_nomad_calls=not mode.endswith("nocalls"))
+                         cow_calls=True, allow_nomad_calls=not mode.endswith("nocalls"),
+                         nomad_v2=model.nomad_v2 if model is not None else False)
         observations, _ = env.reset(seed=seed + episode)
         name = _nomad(env)
         original_cow_count = sum(a.species == Species.COW for a in env.world.actors.values())
@@ -241,36 +278,70 @@ def evaluate_nomad(checkpoint: str | Path | None = None, *, episodes: int = 12,
                     x = torch.as_tensor(ob["observation"]).unsqueeze(0)
                     m = torch.as_tensor(ob["action_mask"]).unsqueeze(0)
                     dist, _ = model(x, m)
-                    if mode == "policy_greedy":
+                    if "greedy" in mode:
                         idx = int(dist.probs.argmax(dim=1).item())
                     else:
-                        # Evaluation follows the stochastic PPO training policy,
-                        # with a dedicated seeded RNG independent of world physics.
                         idx = int(chooser.choice(len(ACTIONS[Species.NOMAD]),
                                                  p=dist.probs.squeeze(0).numpy()))
-            observations, rewards, term, trunc, _ = env.step({name: idx})
+            if mode.endswith("flipped"):
+                kind = ACTIONS[Species.NOMAD][idx].kind
+                if kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
+                    swapped = Kind.SCARY_CALL if kind == Kind.FRIENDLY_CALL else Kind.FRIENDLY_CALL
+                    idx = ACTIONS[Species.NOMAD].index(Action(swapped))
+                    if not ob["action_mask"][idx]:
+                        idx = 0
+            orders = {name: idx}
+            if cow_model is not None:
+                for cow_name in observations:
+                    if not cow_name.startswith("cow_"):
+                        continue
+                    cow_obs = observations[cow_name]
+                    with torch.no_grad():
+                        cow_dist, _ = cow_model(
+                            torch.as_tensor(cow_obs["observation"]).unsqueeze(0),
+                            torch.as_tensor(cow_obs["action_mask"]).unsqueeze(0))
+                        orders[cow_name] = int(cow_dist.probs.argmax(dim=1).item())
+            observations, rewards, term, trunc, _ = env.step(orders)
             cumulative_reward += rewards[name]
             if term[name] or trunc[name]:
                 break
         nomad = env.world.actors.get(env.name_to_id[name])
         cattle = [a for a in env.world.actors.values() if a.species == Species.COW]
         events = env.world.events
+        calls = [e.kind for e in events if e.kind in (Kind.FRIENDLY_CALL.value,
+                                                      Kind.SCARY_CALL.value)
+                 and e.actor_id == env.name_to_id[name]]
+        expected = str(env.signal_kind) if scenario == "nomad_signal" else None
         results.append({"seed": seed + episode, "return": round(cumulative_reward, 4),
+                        "expected_signal": expected,
+                        "correct_calls": calls.count(expected) if expected else None,
+                        "wrong_calls": (len(calls) - calls.count(expected)) if expected else None,
                         "cows_in_pasture": len(env.reached_goal_ids),
                         "cows_alive": len(cattle), "original_cows": original_cow_count,
                         "mean_cow_health": (round(sum(c.health for c in cattle) /
                                                   original_cow_count, 3)
                                             if original_cow_count else 0),
-                        "calls": sum(e.kind in (Kind.FRIENDLY_CALL.value,
-                                                Kind.SCARY_CALL.value) for e in events),
+                        "calls": len(calls),
                         "nomad_attacks": sum(e.kind == "nomad_attack" for e in events),
                         "nomad_alive": nomad is not None})
     def mean(key):
         return round(float(np.mean([entry[key] for entry in results])), 4)
-    return {"mode": mode, "scenario": scenario, "episodes": episodes,
-            "seed_start": seed, "mean_return": mean("return"),
-            "mean_cows_in_pasture": mean("cows_in_pasture"),
-            "mean_cows_alive": mean("cows_alive"),
-            "mean_cow_health": mean("mean_cow_health"),
-            "mean_calls": mean("calls"), "mean_nomad_attacks": mean("nomad_attacks"),
-            "nomad_survival_rate": mean("nomad_alive"), "results": results}
+    report = {"mode": mode, "scenario": scenario, "episodes": episodes,
+              "cow_controller": ("learned_greedy" if cow_checkpoint is not None
+                                 else "scripted"),
+              "seed_start": seed, "mean_return": mean("return"),
+              "mean_cows_in_pasture": mean("cows_in_pasture"),
+              "mean_cows_alive": mean("cows_alive"),
+              "mean_cow_health": mean("mean_cow_health"),
+              "mean_calls": mean("calls"), "mean_nomad_attacks": mean("nomad_attacks"),
+              "nomad_survival_rate": mean("nomad_alive"), "results": results}
+    if scenario == "nomad_signal":
+        report["mean_correct_calls"] = mean("correct_calls")
+        report["mean_wrong_calls"] = mean("wrong_calls")
+        report["friendly_target_rate"] = round(float(np.mean([
+            x["cows_in_pasture"] for x in results if x["expected_signal"] == "friendly_call"
+        ])), 4) if any(x["expected_signal"] == "friendly_call" for x in results) else None
+        report["scary_target_rate"] = round(float(np.mean([
+            x["cows_in_pasture"] for x in results if x["expected_signal"] == "scary_call"
+        ])), 4) if any(x["expected_signal"] == "scary_call" for x in results) else None
+    return report

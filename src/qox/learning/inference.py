@@ -78,7 +78,7 @@ class NomadController:
         actor = world.actors[actor_id]
         if actor.species != Species.NOMAD:
             raise ValueError("NomadController only controls nomads")
-        obs = observe(world, actor)
+        obs = observe(world, actor, nomad_v2=self.model.nomad_v2)
         with torch.no_grad():
             distribution, _ = self.model(
                 torch.as_tensor(obs["observation"]).unsqueeze(0),

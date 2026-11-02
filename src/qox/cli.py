@@ -77,7 +77,7 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--scenario", choices=farmer_scenarios, default="agriculture")
         cmd.add_argument("--mode", choices=("policy", "random", "scripted"), default="policy")
         cmd.add_argument("--report", type=Path)
-    nomad_scenarios = ("nomad_herd", "nomad_defend", "nomad_mixed")
+    nomad_scenarios = ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed")
     train_nomad = sub.add_parser("train-nomad", help="Train a nomad with cattle signals and defense")
     train_nomad.add_argument("--steps", type=int, default=16384)
     train_nomad.add_argument("--seed", type=int, default=42)
@@ -86,15 +86,23 @@ def parser() -> argparse.ArgumentParser:
     train_nomad.add_argument("--max-steps", type=int, default=96)
     train_nomad.add_argument("--scenario", choices=nomad_scenarios, default="nomad_herd")
     train_nomad.add_argument("--output", type=Path, default=Path("runs/nomad.pt"))
+    train_nomad.add_argument("--init-checkpoint", type=Path,
+                             help="Warm-start from a compatible trained nomad policy")
+    train_nomad.add_argument("--nomad-v2", action="store_true",
+                             help="Use derived goal-relative-to-visible-herd features")
     for title in ("eval-nomad", "benchmark-nomad"):
         cmd = sub.add_parser(title, help="Evaluate a frozen nomad policy and call ablations")
         cmd.add_argument("--checkpoint", type=Path)
+        cmd.add_argument("--cow-checkpoint", type=Path,
+                         help="Evaluate with frozen call-aware learned cows, not scripted cows")
         cmd.add_argument("--episodes", type=int, default=12)
         cmd.add_argument("--seed", type=int, default=100000)
         cmd.add_argument("--max-steps", type=int, default=96)
         cmd.add_argument("--scenario", choices=nomad_scenarios, default="nomad_herd")
-        cmd.add_argument("--mode", choices=("policy", "policy_greedy", "policy_nocalls", "random",
-                                            "scripted", "scripted_nocalls"), default="policy")
+        cmd.add_argument("--mode", choices=("policy", "policy_greedy", "policy_nocalls",
+                                            "policy_greedy_nocalls", "policy_greedy_flipped",
+                                            "random", "scripted", "scripted_nocalls",
+                                            "scripted_flipped"), default="policy")
         cmd.add_argument("--report", type=Path)
     inspect = sub.add_parser("inspect", help="Show one actor's local observation and action mask")
     inspect.add_argument("--seed", type=int, default=42)
@@ -117,15 +125,22 @@ def main(argv: list[str] | None = None) -> int:
             result = train_nomad(NomadTrainOptions(
                 steps=args.steps, seed=args.seed, worlds=args.worlds,
                 rollout=args.rollout, max_steps=args.max_steps,
-                scenario=args.scenario), args.output)
+                scenario=args.scenario,
+                nomad_v2=args.nomad_v2 or args.scenario == "nomad_signal"),
+                args.output, init_checkpoint=args.init_checkpoint)
             print(json.dumps({k: v for k, v in result.items()
                               if k not in ("history", "recent_returns")}, indent=2))
             return 0
-        modes = (("policy", "policy_greedy", "policy_nocalls", "random", "scripted", "scripted_nocalls")
+        modes = (("policy_greedy", "policy_greedy_nocalls", "policy_greedy_flipped",
+                  "random", "scripted", "scripted_nocalls", "scripted_flipped")
+                 if args.command == "benchmark-nomad" and args.scenario == "nomad_signal"
+                 else ("policy", "policy_greedy", "policy_nocalls", "random", "scripted",
+                       "scripted_nocalls")
                  if args.command == "benchmark-nomad" else (args.mode,))
         report = {mode: evaluate_nomad(args.checkpoint, episodes=args.episodes,
                                        seed=args.seed, max_steps=args.max_steps,
-                                       scenario=args.scenario, mode=mode)
+                                       scenario=args.scenario, mode=mode,
+                                       cow_checkpoint=args.cow_checkpoint)
                   for mode in modes}
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)

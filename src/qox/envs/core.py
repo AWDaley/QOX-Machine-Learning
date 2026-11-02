@@ -10,6 +10,8 @@ from collections import defaultdict
 from dataclasses import replace
 import random
 
+import numpy as np
+
 from ..actions import Action, Kind
 from ..agents import scripted_actions
 from ..config import SimulationConfig
@@ -27,10 +29,11 @@ class QoxCoreEnv:
 
     def __init__(self, config: SimulationConfig | None = None, max_steps: int = 128,
                  scenario: str = "natural", scripted_others: bool = False,
-                 cow_calls: bool = False, allow_nomad_calls: bool = True):
+                 cow_calls: bool = False, allow_nomad_calls: bool = True,
+                 nomad_v2: bool = False):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal"):
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal", "nomad_signal"):
             raise ValueError(f"Unknown scenario: {scenario}")
         if config is None:
             if scenario == "forage":
@@ -50,6 +53,10 @@ class QoxCoreEnv:
                                           nomads=1, scavengers=0,
                                           ravagers=1 if scenario == "nomad_defend" else 0,
                                           grass_growth=0.12, cow_metabolism=0.16)
+            elif scenario == "nomad_signal":
+                config = SimulationConfig(width=20, height=20, farmers=0, cows=1,
+                                          nomads=1, scavengers=0, ravagers=0,
+                                          cow_metabolism=0.12, grass_growth=0.0)
             elif scenario == "cow_signal":
                 config = SimulationConfig(width=20, height=20, farmers=0, cows=1,
                                           nomads=1, scavengers=0, ravagers=0,
@@ -70,10 +77,12 @@ class QoxCoreEnv:
         self.scenario = scenario
         self.scripted_others = scripted_others
         self.cow_calls = cow_calls
+        self.nomad_v2 = nomad_v2
         self.allow_nomad_calls = allow_nomad_calls
         self.reached_goal_ids: set[int] = set()
         self.signal_kind: Kind | None = None
         self.flip_signal = False  # Counterfactual: different call, same world target.
+        self.signal_committed = False  # M5b single-call curriculum, not world physics.
         self.max_steps = max_steps
         self.world: World
         self.possible_agents: list[str] = []
@@ -102,6 +111,7 @@ class QoxCoreEnv:
         if self.scenario != "natural":
             self._scenario_setup(seed)
         self.reached_goal_ids = set()
+        self.signal_committed = False
         self.possible_agents = [get_agent_name(a) for a in self.world.actors.values()]
         self.name_to_id = {get_agent_name(a): aid for aid, a in self.world.actors.items()}
         self.agents = list(self.possible_agents)
@@ -119,6 +129,9 @@ class QoxCoreEnv:
             return
         if self.scenario == "cow_signal":
             self._cow_signal_scenario(rng)
+            return
+        if self.scenario == "nomad_signal":
+            self._nomad_signal_scenario(rng)
             return
         if self.scenario in ("agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed"):
             self._farmer_scenario(rng, seed)
@@ -209,6 +222,33 @@ class QoxCoreEnv:
             predator.health = 64.0
         self.world.check_invariants()
 
+    def _nomad_signal_scenario(self, rng: random.Random) -> None:
+        """M5b: stationary caller chooses push/pull for a visible one-cow goal.
+
+        The training nomad knows the assigned destination, not a secret answer
+        flag. Cow movement remains selected by the ordinary *scripted* cow
+        controller from locally audible sound. The nomad must choose which
+        signal changes the cow's behavior toward the requested waypoint.
+        """
+        cow = next(a for a in self.world.actors.values() if a.species == Species.COW)
+        nomad = next(a for a in self.world.actors.values()
+                     if a.species == Species.NOMAD)
+        dx, dy = rng.choice(((1, 0), (-1, 0), (0, 1), (0, -1)))
+        pull = bool(rng.getrandbits(1))
+        cow.x, cow.y, cow.energy = 10, 10, 80.0
+        nomad.x, nomad.y, nomad.stamina = 10 + 4 * dx, 10 + 4 * dy, 100.0
+        self.signal_kind = Kind.FRIENDLY_CALL if pull else Kind.SCARY_CALL
+        direction = 1 if pull else -1
+        self.world.herd_goal = (10 + 2 * dx * direction,
+                                10 + 2 * dy * direction)
+        for tile in self.world.grid.tiles:
+            tile.cover = 0.0
+            tile.grass = 0.01
+            tile.crop = tile.waste = 0.0
+            tile.planted = False
+            tile.fertility = 0.2
+        self.world.check_invariants()
+
     def _cow_signal_scenario(self, rng: random.Random) -> None:
         """Balanced two-signal conditioning, independent of fixed map direction.
 
@@ -284,15 +324,35 @@ class QoxCoreEnv:
                 self.world.grid.get(*cow.position).grass = 4.5
         self.world.check_invariants()
 
+    def _legal_mask(self, actor) -> "np.ndarray":
+        """Scenario curriculum restrictions in addition to physics legality.
+
+        Signal training is explicitly stationary; movements become available
+        again, with the same action indices and policy weights, in nomad_herd.
+        """
+        from ..perception import legal_action_mask
+        mask = legal_action_mask(self.world, actor)
+        if actor.species == Species.NOMAD:
+            if not self.allow_nomad_calls:
+                for kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
+                    mask[ACTIONS[Species.NOMAD].index(Action(kind))] = 0
+            if self.scenario == "nomad_signal":
+                allowed = {Kind.WAIT, Kind.REST, Kind.FRIENDLY_CALL, Kind.SCARY_CALL}
+                mask = mask.copy()
+                for index, action in enumerate(ACTIONS[Species.NOMAD]):
+                    if action.kind not in allowed or (self.signal_committed and action.kind in
+                                                      (Kind.FRIENDLY_CALL, Kind.SCARY_CALL)):
+                        mask[index] = 0
+        return mask
+
     def _observations(self) -> dict:
-        observations = {name: observe(self.world, self.world.actors[self.name_to_id[name]],
-                                      cow_calls=self.cow_calls)
-                        for name in self.agents}
-        if not self.allow_nomad_calls:
-            for name, state in observations.items():
-                if name.startswith("nomad_"):
-                    for kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
-                        state["action_mask"][ACTIONS[Species.NOMAD].index(Action(kind))] = 0
+        observations = {}
+        for name in self.agents:
+            actor = self.world.actors[self.name_to_id[name]]
+            state = observe(self.world, actor, cow_calls=self.cow_calls,
+                            nomad_v2=self.nomad_v2)
+            state["action_mask"] = self._legal_mask(actor)
+            observations[name] = state
         return observations
 
     def step(self, actions: dict[str, int]):
@@ -317,10 +377,7 @@ class QoxCoreEnv:
             actor = self.world.actors[self.name_to_id[name]]
             if name in actions:
                 choice = int(actions[name])
-                available = observe(self.world, actor, cow_calls=self.cow_calls)["action_mask"].copy()
-                if actor.species == Species.NOMAD and not self.allow_nomad_calls:
-                    for k in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
-                        available[ACTIONS[Species.NOMAD].index(Action(k))] = 0
+                available = self._legal_mask(actor)
                 if not 0 <= choice < len(ACTIONS[actor.species]):
                     raise ValueError(f"Action index outside action space: {name}={choice}")
                 invalid[name] = not bool(available[choice])
@@ -341,6 +398,10 @@ class QoxCoreEnv:
             else:
                 orders[actor.id] = Action()
         self.world.step(orders)
+        if self.scenario == "nomad_signal":
+            self.signal_committed |= any(e.kind in (Kind.FRIENDLY_CALL.value,
+                                                    Kind.SCARY_CALL.value)
+                                         for e in self.world.last_events)
 
         # Rewards are computed from actually executed physical outcomes, not
         # from intentions, and are attributed to actors using event actor_id.
@@ -372,7 +433,7 @@ class QoxCoreEnv:
             rewards[name] += value
             components[name][event.kind] += value
         if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed",
-                             "cow_signal"):
+                             "cow_signal", "nomad_signal"):
             actual_cows = {aid: a for aid, a in self.world.actors.items()
                            if a.species == Species.COW}
             gained = set()
@@ -391,7 +452,8 @@ class QoxCoreEnv:
                     components[name]["herd_progress"] += delta
                     newly_reached = {aid for aid, cow in actual_cows.items()
                                      if aid not in self.reached_goal_ids
-                                     and abs(cow.x - goal[0]) + abs(cow.y - goal[1]) <= 2}
+                                     and abs(cow.x - goal[0]) + abs(cow.y - goal[1]) <=
+                                     (0 if self.scenario == "nomad_signal" else 2)}
                     gained.update(newly_reached)
                     for _ in newly_reached:
                         rewards[name] += 2.0

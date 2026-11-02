@@ -42,6 +42,10 @@ FARMER_FEATURES = (
 )
 FARMER_OBSERVATION_VERSION = 1
 NOMAD_OBSERVATION_VERSION = 1
+NOMAD_RELATIONAL_OBSERVATION_VERSION = 2
+NOMAD_RELATIONAL_FEATURES = (
+    "cow_to_goal_dx", "cow_to_goal_dy", "caller_goal_alignment",
+)
 # Opt-in v2 cow features preserve existing M3 v1 checkpoints in the default runner.
 COW_CALL_OBSERVATION_VERSION = 2
 COW_CALL_FEATURES = (
@@ -56,18 +60,21 @@ NOMAD_FEATURES = (
 )
 
 
-def features_for(species: Species, *, cow_calls: bool = False) -> tuple[str, ...]:
+def features_for(species: Species, *, cow_calls: bool = False,
+                 nomad_v2: bool = False) -> tuple[str, ...]:
     if species == Species.FARMER:
         return FEATURES + FARMER_FEATURES
     if species == Species.NOMAD:
-        return FEATURES + NOMAD_FEATURES
+        return (FEATURES + NOMAD_FEATURES +
+                (NOMAD_RELATIONAL_FEATURES if nomad_v2 else ()))
     if species == Species.COW and cow_calls:
         return FEATURES + COW_CALL_FEATURES
     return FEATURES
 
 
-def observation_size(species: Species, *, cow_calls: bool = False) -> int:
-    return len(features_for(species, cow_calls=cow_calls))
+def observation_size(species: Species, *, cow_calls: bool = False,
+                     nomad_v2: bool = False) -> int:
+    return len(features_for(species, cow_calls=cow_calls, nomad_v2=nomad_v2))
 
 
 def _catalog(*kinds: Kind) -> tuple[Action, ...]:
@@ -245,7 +252,8 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
     return np.asarray(mask, dtype=np.int8)
 
 
-def observe(world: World, actor: Actor, *, cow_calls: bool = False) -> dict[str, np.ndarray]:
+def observe(world: World, actor: Actor, *, cow_calls: bool = False,
+            nomad_v2: bool = False) -> dict[str, np.ndarray]:
     """Return bounded numeric observations and physical action masks."""
     tile = world.grid.get(*actor.position)
     values = [
@@ -423,10 +431,29 @@ def observe(world: World, actor: Actor, *, cow_calls: bool = False) -> dict[str,
                        float(actor.scary_cooldown == 0 and
                              actor.stamina >= world.config.scary_call_stamina),
                        min(1, milk_cows / 3), min(1, len(ravagers) / 4)))
+        if nomad_v2:
+            # Derived solely from *visible* cows and the nomad's own assigned
+            # destination. Does not reveal any unseen cattle or enemy locations.
+            if visible_cows and goal is not None:
+                goal_dx = (goal[0] - herd_x) / VISION_RADIUS
+                goal_dy = (goal[1] - herd_y) / VISION_RADIUS
+                caller_dx = (actor.x - herd_x) / VISION_RADIUS
+                caller_dy = (actor.y - herd_y) / VISION_RADIUS
+                # Signed geometric alignment: positive means caller lies
+                # ahead of the herd along its desired travel direction.
+                norm = ((goal_dx**2 + goal_dy**2)**0.5 *
+                        (caller_dx**2 + caller_dy**2)**0.5)
+                alignment = ((goal_dx * caller_dx + goal_dy * caller_dy) /
+                             norm) if norm > 1e-8 else 0.0
+                values.extend((max(-1, min(1, goal_dx)),
+                               max(-1, min(1, goal_dy)),
+                               max(-1, min(1, alignment))))
+            else:
+                values.extend((0.0, 0.0, 0.0))
     elif actor.species == Species.COW and cow_calls:
         values.extend(call_features(world, actor))
     result = np.asarray(values, dtype=np.float32)
-    expected = observation_size(actor.species, cow_calls=cow_calls)
+    expected = observation_size(actor.species, cow_calls=cow_calls, nomad_v2=nomad_v2)
     if result.shape != (expected,):
         raise AssertionError(f"Broken observation schema: {len(result)} != {expected}")
     return {"observation": result, "action_mask": legal_action_mask(world, actor)}
