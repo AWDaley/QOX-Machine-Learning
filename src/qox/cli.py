@@ -150,6 +150,10 @@ def parser() -> argparse.ArgumentParser:
     joint.add_argument("--output-dir", type=Path, default=Path("runs/joint-herd"))
     joint.add_argument("--phase", choices=("alternate", "cow", "nomad"),
                        default="alternate", help="Train both roles or keep one frozen")
+    joint.add_argument("--scenario", choices=("nomad_herd", "nomad_defend", "nomad_mixed"),
+                       default="nomad_herd", help="Training mixture: migration, defense, or both")
+    joint.add_argument("--partner-mode", choices=("greedy", "sample"), default="greedy",
+                       help="Use greedy or sampled actions from the frozen partner")
     joint.add_argument("--cow-steps", type=int, default=12288)
     joint.add_argument("--nomad-steps", type=int, default=4096)
     joint.add_argument("--rounds", type=int, default=1)
@@ -161,10 +165,21 @@ def parser() -> argparse.ArgumentParser:
     comparison = sub.add_parser("benchmark-herd", help="M5c: paired two-learned-policy call ablations")
     comparison.add_argument("--cow-checkpoint", type=Path, required=True)
     comparison.add_argument("--nomad-checkpoint", type=Path, required=True)
+    comparison.add_argument("--scenario", choices=("nomad_herd", "nomad_defend", "nomad_mixed"),
+                            default="nomad_herd")
     comparison.add_argument("--episodes", type=int, default=24)
     comparison.add_argument("--seed", type=int, default=340000)
     comparison.add_argument("--max-steps", type=int, default=96)
     comparison.add_argument("--report", type=Path)
+    compare = sub.add_parser("compare-herd", help="M16: paired migration/defense candidate gate")
+    compare.add_argument("--baseline-cow", type=Path, required=True)
+    compare.add_argument("--baseline-nomad", type=Path, required=True)
+    compare.add_argument("--candidate-cow", type=Path, required=True)
+    compare.add_argument("--candidate-nomad", type=Path, required=True)
+    compare.add_argument("--episodes", type=int, default=48)
+    compare.add_argument("--seed", type=int, default=660000)
+    compare.add_argument("--max-steps", type=int, default=96)
+    compare.add_argument("--report", type=Path)
     ravager_scenarios = ("ravager_ambush", "ravager_carcass",
                          "ravager_hibernate", "ravager_mixed")
     predator = sub.add_parser("train-ravager", help="M6: train masked PPO ravager policy")
@@ -370,6 +385,21 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({k: {key: value for key, value in report.items()
                               if key != "results"} for k, report in results.items()}, indent=2))
         return 0
+    if args.command == "compare-herd":
+        try:
+            from .learning.joint_ppo import compare_joint
+        except ImportError as exc:
+            raise SystemExit("Herd evaluation requires PyTorch: pip install -e '.[ml]'") from exc
+        report = compare_joint(args.baseline_cow, args.baseline_nomad,
+                               args.candidate_cow, args.candidate_nomad,
+                               episodes=args.episodes, validation_seed=args.seed,
+                               max_steps=args.max_steps)
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps({k: v for k, v in report.items()
+                          if k not in ("paired_migration", "paired_defense")}, indent=2))
+        return 0
     if args.command in ("train-herd", "benchmark-herd"):
         try:
             from .learning.joint_ppo import (JointTrainOptions, benchmark_joint,
@@ -381,14 +411,15 @@ def main(argv: list[str] | None = None) -> int:
                 cow_steps=args.cow_steps, nomad_steps=args.nomad_steps,
                 seed=args.seed, rounds=args.rounds, worlds=args.worlds,
                 rollout=args.rollout, max_steps=args.max_steps,
-                epochs=args.epochs), args.cow_checkpoint,
+                epochs=args.epochs, scenario=args.scenario,
+                partner_mode=args.partner_mode), args.cow_checkpoint,
                 args.nomad_checkpoint, args.output_dir, phase=args.phase)
             print(json.dumps({k: v for k, v in report.items() if k != "rounds"},
                              indent=2))
             return 0
         report = benchmark_joint(args.cow_checkpoint, args.nomad_checkpoint,
                                  episodes=args.episodes, seed=args.seed,
-                                 max_steps=args.max_steps)
+                                 max_steps=args.max_steps, scenario=args.scenario)
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -291,3 +291,29 @@ qox viewer --load-world runs/day2.qoxworld
 World saves include physical state, all events, births/juveniles, active calls/festivals,
 carcasses, counters and both PRNG states. They are compressed, validated JSON ZIPs,
 not model weights or pickle files. See [M15 World Save and Resume](docs/M15_WORLD_SAVES.md).
+
+## M16a: learned cow–nomad herding under predator pressure
+
+M16a extends the existing shared PPO training pipeline with migration, defense,
+and mixed curricula, and permits a stochastic frozen learning partner. A new
+paired `compare-herd` validation command checks **both** migration with call
+ablations and cow health under a scripted predator. The command does **not**
+replace or promote a trained checkpoint.
+
+```powershell
+qox train-herd --scenario nomad_mixed --partner-mode sample --phase alternate `
+  --cow-checkpoint checkpoints/cow.pt --nomad-checkpoint checkpoints/nomad.pt `
+  --cow-steps 6144 --nomad-steps 3072 --worlds 4 --rollout 384 `
+  --max-steps 64 --output-dir runs/m16a
+
+qox compare-herd --baseline-cow checkpoints/cow.pt --baseline-nomad checkpoints/nomad.pt `
+  --candidate-cow runs/m16a/cow_round1.pt --candidate-nomad runs/m16a/nomad_round1.pt `
+  --episodes 24 --seed 660000 --max-steps 64 --report runs/m16a-validation.json
+```
+
+Initial validation showed a tradeoff: the mixed trained pair improved mean cow
+health in predator encounters, but decreased pasture arrivals and weakened call
+sensitivity. A separate cow-only update did not convincingly improve arrivals.
+Neither candidate passed the no-automatic-promotion diagnostic, so the original
+M5c/M5b policy pair remains preferred. Details, controls, and research caveats:
+[**M16a Joint Herd Reliability**](docs/M16A_JOINT_HERD_RELIABILITY.md).

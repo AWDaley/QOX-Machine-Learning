@@ -31,6 +31,8 @@ class JointTrainOptions:
     """Budgets count *individual actor decisions*, not world ticks."""
 
     rounds: int = 1
+    scenario: str = "nomad_herd"
+    partner_mode: str = "greedy"
     cow_steps: int = 12_288
     nomad_steps: int = 4_096
     seed: int = 407
@@ -51,6 +53,10 @@ class JointTrainOptions:
             raise ValueError("All training sizes and budgets must be positive")
         if self.rollout % (self.worlds * 3):
             raise ValueError("rollout must be divisible by three cows per world")
+        if self.scenario not in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+            raise ValueError("Joint scenario must be nomad_herd, nomad_defend or nomad_mixed")
+        if self.partner_mode not in ("greedy", "sample"):
+            raise ValueError("Partner mode must be greedy or sample")
         if not (self.lr > 0 and 0 < self.gamma <= 1 and 0 <= self.gae_lambda <= 1
                 and 0 < self.clip < 1 and self.entropy >= 0):
             raise ValueError("Invalid PPO settings")
@@ -117,7 +123,9 @@ def train_phase(species: Species, cow_model: CowPolicy, nomad_model: NomadPolicy
 
     Each partner acts on its own observation. It cannot see the hidden pasture
     goal if it is a cow. There are no imitation labels or action rewrites.
-    This phase deliberately targets only predator-free nomad_herd curriculum.
+    The selected scenario can alternate migration and predator-defense tasks.
+    A world-level reset cuts all training trajectories when *any* actor dies,
+    so advantages cannot leak across independent episodes.
     """
     if species not in (Species.COW, Species.NOMAD):
         raise ValueError("Only cow and nomad partner training are supported")
@@ -134,7 +142,7 @@ def train_phase(species: Species, cow_model: CowPolicy, nomad_model: NomadPolicy
     frozen.eval()
     optimizer = torch.optim.Adam(trainable.parameters(), lr=options.lr, eps=1e-5)
     other = Species.NOMAD if species == Species.COW else Species.COW
-    envs = [QoxCoreEnv(scenario="nomad_herd", max_steps=options.max_steps,
+    envs = [QoxCoreEnv(scenario=options.scenario, max_steps=options.max_steps,
                        scripted_others=True, cow_calls=True,
                        nomad_v2=nomad_model.nomad_v2)
             for _ in range(options.worlds)]
@@ -163,7 +171,8 @@ def train_phase(species: Species, cow_model: CowPolicy, nomad_model: NomadPolicy
             mask = torch.as_tensor(np.stack([o["action_mask"] for o in training_obs]),
                                    dtype=torch.float32)
             choice, logp, value = _sample_actions(trainable, training_obs)
-            partner_choice, _, _ = _sample_actions(frozen, partner_obs, greedy=True)
+            partner_choice, _, _ = _sample_actions(
+                frozen, partner_obs, greedy=(options.partner_mode == "greedy"))
             rewards_flat: list[float] = []
             dones_flat: list[float] = []
             train_offset, partner_offset = 0, 0
@@ -176,17 +185,13 @@ def train_phase(species: Species, cow_model: CowPolicy, nomad_model: NomadPolicy
                 train_offset += len(names[wi])
                 observation, rewards, terminated, truncated, _ = env.step(orders)
                 rewards_flat.extend(float(rewards[name]) for name in names[wi])
-                dones_flat.extend(float(terminated[name] or truncated[name])
-                                  for name in names[wi])
-                returns[wi] += sum(float(rewards[name]) for name in names[wi])
                 done = any(terminated[name] or truncated[name]
                            for name in names[wi] + other_names[wi])
+                # Even surviving actors' trajectories end when the entire world
+                # resets after another animal dies. Mark them done for GAE.
+                dones_flat.extend([float(done)] * len(names[wi]))
+                returns[wi] += sum(float(rewards[name]) for name in names[wi])
                 if done:
-                    # In M5c the nomad_herd environment has no predators.
-                    # Reset *whole* world on any terminal to keep partners aligned.
-                    if not all(truncated.get(name, False)
-                               for name in names[wi] + other_names[wi]):
-                        raise RuntimeError("Unexpected early death in M5c no-predator scenario")
                     completed_returns.append(returns[wi])
                     returns[wi] = 0.0
                     episodes[wi] += 1
@@ -254,7 +259,8 @@ def train_phase(species: Species, cow_model: CowPolicy, nomad_model: NomadPolicy
     _save_model(trainable, optimizer, species, output, options, samples, round_index)
     return {"species": species.value, "checkpoint": str(output),
             "completed_steps": samples, "episodes": sum(episodes), "history": history,
-            "final_loss": round(loss_value, 6)}
+            "final_loss": round(loss_value, 6), "scenario": options.scenario,
+            "partner_mode": options.partner_mode}
 
 
 def train_joint(options: JointTrainOptions, cow_checkpoint: str | Path,
@@ -306,7 +312,7 @@ def train_joint(options: JointTrainOptions, cow_checkpoint: str | Path,
 
 def benchmark_joint(cow_checkpoint: str | Path, nomad_checkpoint: str | Path, *,
                     episodes: int = 24, seed: int = 340_000,
-                    max_steps: int = 96) -> dict:
+                    max_steps: int = 96, scenario: str = "nomad_herd") -> dict:
     """Paired held-out counterfactuals with learned cows and nomad.
 
     Data include raw per-seed outcomes. The deterministic counterfactuals
@@ -314,34 +320,155 @@ def benchmark_joint(cow_checkpoint: str | Path, nomad_checkpoint: str | Path, *,
     """
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes and max_steps must be positive")
+    if scenario not in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+        raise ValueError("Unsupported joint herding evaluation scenario")
     modes = {"learned": "policy_greedy",
              "no_calls": "policy_greedy_nocalls",
              "reversed_calls": "policy_greedy_flipped",
              "scripted_nomad": "scripted",
              "random_nomad": "random"}
     runs = {key: evaluate_nomad(nomad_checkpoint, episodes=episodes, seed=seed,
-                                 scenario="nomad_herd", max_steps=max_steps,
+                                 scenario=scenario, max_steps=max_steps,
                                  mode=value, cow_checkpoint=cow_checkpoint)
             for key, value in modes.items()}
     original = evaluate_nomad(nomad_checkpoint, episodes=episodes, seed=seed,
-                              scenario="nomad_herd", max_steps=max_steps,
+                              scenario=scenario, max_steps=max_steps,
                               mode="policy_greedy")
     summary = {key: {field: report[field] for field in
-                     ("mean_cows_in_pasture", "mean_cows_alive", "mean_calls")}
+                     ("mean_cows_in_pasture", "mean_cows_alive", "mean_cow_health",
+                      "nomad_survival_rate", "mean_nomad_attacks", "mean_calls")}
                for key, report in runs.items()}
     summary["scripted_cows"] = {
         "mean_cows_in_pasture": original["mean_cows_in_pasture"],
         "mean_cows_alive": original["mean_cows_alive"],
+        "mean_cow_health": original["mean_cow_health"],
+        "nomad_survival_rate": original["nomad_survival_rate"],
+        "mean_nomad_attacks": original["mean_nomad_attacks"],
         "mean_calls": original["mean_calls"],
     }
     per_seed = []
     for i in range(episodes):
         per_seed.append({"seed": seed+i,
                          **{k: v["results"][i]["cows_in_pasture"] for k, v in runs.items()},
+                         "cow_health": runs["learned"]["results"][i]["mean_cow_health"],
+                         "nomad_alive": runs["learned"]["results"][i]["nomad_alive"],
                          "scripted_cows": original["results"][i]["cows_in_pasture"]})
-    return {"episodes": episodes, "seed_start": seed,
+    return {"episodes": episodes, "seed_start": seed, "scenario": scenario,
             "cow_checkpoint": str(cow_checkpoint),
             "nomad_checkpoint": str(nomad_checkpoint),
             "summary": summary, "paired_results": per_seed,
             "mean_gain_over_no_calls": round(float(np.mean([
                 row["learned"] - row["no_calls"] for row in per_seed])), 4)}
+
+
+def _paired_interval(differences: list[float], *, seed: int) -> tuple[float, float]:
+    """Bootstrap paired differences; uncertainty, not proof of generalization."""
+    if not differences:
+        raise ValueError("Expected at least one paired outcome")
+    values = np.asarray(differences, dtype=np.float64)
+    random_source = np.random.default_rng(seed)
+    sample_indices = random_source.integers(0, len(values), size=(500, len(values)))
+    means = values[sample_indices].mean(axis=1)
+    return tuple(round(float(x), 4) for x in np.percentile(means, [2.5, 97.5]))
+
+
+def compare_joint(baseline_cow: str | Path, baseline_nomad: str | Path,
+                  candidate_cow: str | Path, candidate_nomad: str | Path, *,
+                  episodes: int = 48, validation_seed: int = 660_000,
+                  max_steps: int = 96) -> dict:
+    """Counterfactual validation on common migration and defense seeds.
+
+    Only the modes needed for comparison are run; there is no scripted control
+    in this fast candidate gate. The full benchmark_joint still reports those
+    baselines separately. Neither checkpoints nor the active session mutate.
+    """
+    if episodes < 1 or max_steps < 1 or validation_seed < 0:
+        raise ValueError("episodes/max_steps must be positive and seed nonnegative")
+    # CPU inference with many tiny networks is much faster without oversubscription.
+    torch.set_num_threads(1)
+    pairs = ((baseline_cow, baseline_nomad), (candidate_cow, candidate_nomad))
+    runs: dict[str, dict] = {}
+    for label, pair in zip(("baseline", "candidate"), pairs, strict=True):
+        migration = evaluate_nomad(pair[1], cow_checkpoint=pair[0],
+                                   episodes=episodes, seed=validation_seed,
+                                   max_steps=max_steps, scenario="nomad_herd",
+                                   mode="policy_greedy")
+        no_calls = evaluate_nomad(pair[1], cow_checkpoint=pair[0],
+                                  episodes=episodes, seed=validation_seed,
+                                  max_steps=max_steps, scenario="nomad_herd",
+                                  mode="policy_greedy_nocalls")
+        defense = evaluate_nomad(pair[1], cow_checkpoint=pair[0],
+                                 episodes=episodes, seed=validation_seed + 200_000,
+                                 max_steps=max_steps, scenario="nomad_defend",
+                                 mode="policy_greedy")
+        runs[label] = {"migration": migration, "no_calls": no_calls,
+                       "defense": defense}
+    old, new = runs["baseline"], runs["candidate"]
+    arrivals = [c["cows_in_pasture"] - b["cows_in_pasture"]
+                for b, c in zip(old["migration"]["results"],
+                                new["migration"]["results"], strict=True)]
+    health = [c["mean_cow_health"] - b["mean_cow_health"]
+              for b, c in zip(old["defense"]["results"],
+                              new["defense"]["results"], strict=True)]
+    gain = round(float(np.mean(arrivals)), 4)
+    health_gain = round(float(np.mean(health)), 4)
+    arrival_interval = _paired_interval(arrivals, seed=validation_seed + 7)
+    health_interval = _paired_interval(health, seed=validation_seed + 11)
+    call_lifts = {label: round(report["migration"]["mean_cows_in_pasture"] -
+                               report["no_calls"]["mean_cows_in_pasture"], 4)
+                  for label, report in runs.items()}
+    checks = {
+        "enough_validation_seeds": episodes >= 24,
+        "arrival_improvement": gain > 0 and arrival_interval[0] > 0,
+        "correct_calls_help_candidate": call_lifts["candidate"] > 0,
+        "defense_health_not_worse_than_five_points": health_gain >= -5.0,
+        "defense_survival_not_worse": (
+            new["defense"]["mean_cows_alive"] >=
+            old["defense"]["mean_cows_alive"]),
+    }
+    metrics = ("mean_cows_in_pasture", "mean_cows_alive", "mean_cow_health",
+               "nomad_survival_rate", "mean_nomad_attacks", "mean_calls")
+    def selection(name: str, mode: str) -> dict:
+        return {key: runs[name][mode][key] for key in metrics}
+
+    return {
+        "validation_seed": validation_seed, "episodes_per_scenario": episodes,
+        "max_steps": max_steps,
+        "pairs": {label: {"cow_checkpoint": str(pair[0]),
+                          "nomad_checkpoint": str(pair[1])}
+                  for label, pair in zip(("baseline", "candidate"), pairs, strict=True)},
+        "migration": {
+            "baseline": selection("baseline", "migration"),
+            "candidate": selection("candidate", "migration"),
+            "baseline_no_calls": selection("baseline", "no_calls"),
+            "candidate_no_calls": selection("candidate", "no_calls"),
+            "arrival_gain_per_world": gain,
+            "arrival_gain_bootstrap_95pct": arrival_interval,
+            "baseline_correct_call_lift": call_lifts["baseline"],
+            "candidate_correct_call_lift": call_lifts["candidate"],
+        },
+        "defense": {
+            "baseline": selection("baseline", "defense"),
+            "candidate": selection("candidate", "defense"),
+            "cow_health_gain": health_gain,
+            "cow_health_gain_bootstrap_95pct": health_interval,
+        },
+        "diagnostic_checks": checks,
+        "candidate_eligible_for_manual_review": all(checks.values()),
+        "notes": ("No checkpoint promoted. Validation is not a final blind test. "
+                  "Predator in defense worlds is scripted; compare on untouched "
+                  "test seeds before interpreting policy improvements."),
+        "paired_migration": [{"seed": validation_seed + i,
+                              "baseline": b["cows_in_pasture"],
+                              "candidate": c["cows_in_pasture"],
+                              "difference": arrivals[i]}
+                             for i, (b, c) in enumerate(zip(
+                                 old["migration"]["results"],
+                                 new["migration"]["results"], strict=True))],
+        "paired_defense": [{"seed": validation_seed + 200_000 + i,
+                            "baseline_cow_health": b["mean_cow_health"],
+                            "candidate_cow_health": c["mean_cow_health"]}
+                           for i, (b, c) in enumerate(zip(
+                               old["defense"]["results"],
+                               new["defense"]["results"], strict=True))],
+    }
