@@ -88,7 +88,7 @@ def test_core_step_has_parallel_api_lifetime_semantics():
     assert new_obs == {} and env.agents == []
     with pytest.raises(RuntimeError, match="episode finished"):
         env.step({})
-    env.reset(seed=99)
+    env.reset(seed=99, options={"options": 1})
     assert env.agents == initial
 
 
