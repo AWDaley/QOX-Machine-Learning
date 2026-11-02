@@ -41,14 +41,33 @@ FARMER_FEATURES = (
     "waste_dy", "waste_amount", "home_global_distance",
 )
 FARMER_OBSERVATION_VERSION = 1
+NOMAD_OBSERVATION_VERSION = 1
+# Opt-in v2 cow features preserve existing M3 v1 checkpoints in the default runner.
+COW_CALL_OBSERVATION_VERSION = 2
+COW_CALL_FEATURES = (
+    "friendly_dx", "friendly_dy", "friendly_strength",
+    "scary_dx", "scary_dy", "scary_strength",
+)
+NOMAD_FEATURES = (
+    "visible_herd_fraction", "visible_herd_dx", "visible_herd_dy",
+    "herd_goal_known", "herd_goal_dx", "herd_goal_dy",
+    "nearby_cows_at_risk", "nearby_nomads", "friendly_ready", "scary_ready",
+    "nearby_milk_available", "nearby_ravager_threat",
+)
 
 
-def features_for(species: Species) -> tuple[str, ...]:
-    return FEATURES + FARMER_FEATURES if species == Species.FARMER else FEATURES
+def features_for(species: Species, *, cow_calls: bool = False) -> tuple[str, ...]:
+    if species == Species.FARMER:
+        return FEATURES + FARMER_FEATURES
+    if species == Species.NOMAD:
+        return FEATURES + NOMAD_FEATURES
+    if species == Species.COW and cow_calls:
+        return FEATURES + COW_CALL_FEATURES
+    return FEATURES
 
 
-def observation_size(species: Species) -> int:
-    return len(features_for(species))
+def observation_size(species: Species, *, cow_calls: bool = False) -> int:
+    return len(features_for(species, cow_calls=cow_calls))
 
 
 def _catalog(*kinds: Kind) -> tuple[Action, ...]:
@@ -60,7 +79,9 @@ ACTIONS: dict[Species, tuple[Action, ...]] = {
     Species.FARMER: _catalog(Kind.PLANT, Kind.HARVEST, Kind.COLLECT_WASTE,
                              Kind.FERTILIZE, Kind.EAT, Kind.DEPOSIT, Kind.ENTER_REFUGE),
     Species.COW: _catalog(Kind.GRAZE),
-    Species.NOMAD: _catalog(Kind.MILK, Kind.EAT),
+    Species.NOMAD: (_catalog(Kind.MILK, Kind.EAT, Kind.FRIENDLY_CALL,
+                             Kind.SCARY_CALL, Kind.ATTACK) +
+                    tuple(Action(Kind.DASH, *delta) for delta in DIRECTIONS)),
     Species.SCAVENGER: _catalog(Kind.EAT, Kind.EAT_CARCASS),
     Species.RAVAGER: _catalog(Kind.EAT_CARCASS, Kind.ATTACK),
 }
@@ -112,6 +133,40 @@ def _nearest_actor(world: World, observer: Actor, species: Species):
                                        a.id), default=None)
 
 
+def call_features(world: World, actor: Actor) -> tuple[float, ...]:
+    """Loudest audible call of each type; no direct force or hidden global info.
+
+    Other calls may interfere acoustically, but are not automatically interpreted
+    as orders. Distances and strengths are local and normalized to [-1, 1].
+    """
+    values: list[float] = []
+    for kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
+        audible = []
+        for signal in world.calls:
+            if signal.kind != kind.value or signal.source_id == actor.id:
+                continue
+            distance = abs(signal.x - actor.x) + abs(signal.y - actor.y)
+            if distance > signal.radius:
+                continue
+            age = world.tick - signal.tick
+            if not 0 <= age <= world.config.call_duration:
+                continue
+            strength = signal.intensity * (1 - distance / (signal.radius + 1)) * (
+                1 - age / (world.config.call_duration + 1))
+            if strength > 0:
+                audible.append((-strength, signal.source_id, signal))
+        if audible:
+            neg_strength, _, source = min(audible)
+            values.extend((max(-1.0, min(1.0, (source.x - actor.x) /
+                                           world.config.call_radius)),
+                           max(-1.0, min(1.0, (source.y - actor.y) /
+                                           world.config.call_radius)),
+                           min(1.0, -neg_strength)))
+        else:
+            values.extend((0.0, 0.0, 0.0))
+    return tuple(values)
+
+
 def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
     """Mask only physically impossible actions; collision-risky moves stay legal."""
     tile = world.grid.get(*actor.position)
@@ -122,11 +177,22 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
         if actor.sheltered and kind not in (Kind.WAIT, Kind.MOVE, Kind.REST, Kind.EAT, Kind.DEPOSIT):
             mask.append(0)
             continue
-        if kind == Kind.MOVE:
-            x, y = actor.x + action.dx, actor.y + action.dy
-            valid = (actor.stamina >= 0.5 and world.grid.contains(x, y)
+        if kind in (Kind.MOVE, Kind.DASH):
+            is_dash = kind == Kind.DASH
+            distance = 2 if is_dash else 1
+            cost = world.config.nomad_dash_stamina if is_dash else 0.5
+            x, y = actor.x + distance * action.dx, actor.y + distance * action.dy
+            valid = ((not is_dash or actor.species == Species.NOMAD)
+                     and actor.stamina >= cost and world.grid.contains(x, y)
                      and world.grid.get(x, y).passable
                      and not any((s.x, s.y) == (x, y) for s in world.settlements))
+            if valid and is_dash:
+                mx, my = actor.x + action.dx, actor.y + action.dy
+                valid = (world.grid.contains(mx, my)
+                         and world.grid.get(mx, my).passable
+                         and not any((s.x, s.y) == (mx, my) for s in world.settlements)
+                         and not any(a.id != actor.id and not a.sheltered
+                                     and a.position == (mx, my) for a in world.actors.values()))
         elif kind == Kind.GRAZE:
             valid = tile.grass > 0.01 or tile.crop > 0.01
         elif kind == Kind.ENTER_REFUGE:
@@ -157,17 +223,29 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
             valid = any(c.x == actor.x and c.y == actor.y for c in world.carcasses.values())
         elif kind == Kind.DEPOSIT:
             valid = actor.carried_food > 0 and world._nearby_settlement(actor) is not None
+        elif kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
+            friendly = kind == Kind.FRIENDLY_CALL
+            valid = (actor.species == Species.NOMAD
+                     and (actor.friendly_cooldown if friendly else actor.scary_cooldown) == 0
+                     and actor.stamina >= (world.config.friendly_call_stamina if friendly
+                                           else world.config.scary_call_stamina))
         elif kind == Kind.ATTACK:
-            valid = actor.stamina >= 4 and any(
-                a.id != actor.id and a.species != Species.RAVAGER
-                and not a.sheltered
-                and abs(a.x - actor.x) + abs(a.y - actor.y) <= 1
-                for a in world.actors.values())
+            if actor.species == Species.NOMAD:
+                valid = (actor.stamina >= world.config.nomad_attack_stamina
+                         and any(other.species == Species.RAVAGER
+                                 and abs(other.x - actor.x) + abs(other.y - actor.y) <= 1
+                                 for other in world.actors.values()))
+            else:
+                valid = actor.stamina >= 4 and any(
+                    a.id != actor.id and a.species != Species.RAVAGER
+                    and not a.sheltered
+                    and abs(a.x - actor.x) + abs(a.y - actor.y) <= 1
+                    for a in world.actors.values())
         mask.append(int(valid))
     return np.asarray(mask, dtype=np.int8)
 
 
-def observe(world: World, actor: Actor) -> dict[str, np.ndarray]:
+def observe(world: World, actor: Actor, *, cow_calls: bool = False) -> dict[str, np.ndarray]:
     """Return bounded numeric observations and physical action masks."""
     tile = world.grid.get(*actor.position)
     values = [
@@ -310,8 +388,45 @@ def observe(world: World, actor: Actor) -> dict[str, np.ndarray]:
             (min(1, (abs(home.x - actor.x) + abs(home.y - actor.y)) /
                  (world.grid.width + world.grid.height)) if home else 0),
         ])
+    if actor.species == Species.NOMAD:
+        visible_cows = [other for other in world.actors.values()
+                        if other.species == Species.COW
+                        and _visible(world, actor, other.x, other.y)]
+        if visible_cows:
+            herd_x = sum(c.x for c in visible_cows) / len(visible_cows)
+            herd_y = sum(c.y for c in visible_cows) / len(visible_cows)
+            herd_dx = max(-1, min(1, (herd_x - actor.x) / VISION_RADIUS))
+            herd_dy = max(-1, min(1, (herd_y - actor.y) / VISION_RADIUS))
+        else:
+            herd_dx, herd_dy = 0.0, 0.0
+        goal = world.herd_goal
+        if goal is not None:
+            goal_x = max(-1, min(1, (goal[0] - actor.x) / world.grid.width))
+            goal_y = max(-1, min(1, (goal[1] - actor.y) / world.grid.height))
+        else:
+            goal_x, goal_y = 0.0, 0.0
+        ravagers = [enemy for enemy in world.actors.values()
+                    if enemy.species == Species.RAVAGER
+                    and _visible(world, actor, enemy.x, enemy.y)]
+        threatened = sum(any(abs(c.x - r.x) + abs(c.y - r.y) <= 2
+                             for r in ravagers) for c in visible_cows)
+        nearby_nomads = sum(a.id != actor.id and a.species == Species.NOMAD
+                            and _visible(world, actor, a.x, a.y)
+                            for a in world.actors.values())
+        milk_cows = sum(c.milk > 0 and abs(c.x - actor.x) + abs(c.y - actor.y) <= 1
+                        for c in visible_cows)
+        values.extend((min(1, len(visible_cows) / 8), herd_dx, herd_dy,
+                       float(goal is not None), goal_x, goal_y,
+                       min(1, threatened / 4), min(1, nearby_nomads / 4),
+                       float(actor.friendly_cooldown == 0 and
+                             actor.stamina >= world.config.friendly_call_stamina),
+                       float(actor.scary_cooldown == 0 and
+                             actor.stamina >= world.config.scary_call_stamina),
+                       min(1, milk_cows / 3), min(1, len(ravagers) / 4)))
+    elif actor.species == Species.COW and cow_calls:
+        values.extend(call_features(world, actor))
     result = np.asarray(values, dtype=np.float32)
-    expected = observation_size(actor.species)
+    expected = observation_size(actor.species, cow_calls=cow_calls)
     if result.shape != (expected,):
         raise AssertionError(f"Broken observation schema: {len(result)} != {expected}")
     return {"observation": result, "action_mask": legal_action_mask(world, actor)}

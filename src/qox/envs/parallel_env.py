@@ -20,14 +20,17 @@ class QoxParallelEnv(ParallelEnv):
 
     def __init__(self, config: SimulationConfig | None = None,
                  max_steps: int = 128, scenario: str = "natural",
-                 render_mode: str | None = None):
+                 render_mode: str | None = None,
+                 cow_calls: bool = False, allow_nomad_calls: bool = True):
         if render_mode not in (None, "ansi"):
             raise ValueError("Only ANSI rendering is currently available")
-        if scenario == "farmer_mixed":
+        if scenario in ("farmer_mixed", "nomad_mixed"):
             raise ValueError("farmer_mixed changes agent populations across resets; "
                              "use the fixed agriculture/refuge/manure scenarios for PettingZoo")
         self.render_mode = render_mode
-        self.core = QoxCoreEnv(config, max_steps, scenario)
+        self.core = QoxCoreEnv(config, max_steps, scenario,
+                               cow_calls=cow_calls, allow_nomad_calls=allow_nomad_calls)
+        self.cow_calls = cow_calls
         self.possible_agents = list(self.core.possible_agents)
         self.agents = list(self.core.agents)
         self.observation_spaces = {}
@@ -37,7 +40,7 @@ class QoxParallelEnv(ParallelEnv):
             n = len(ACTIONS[actor.species])
             self.observation_spaces[name] = spaces.Dict({
                 "observation": spaces.Box(low=-1, high=1,
-                                           shape=(observation_size(actor.species),), dtype=np.float32),
+                                           shape=(observation_size(actor.species, cow_calls=self.cow_calls),), dtype=np.float32),
                 "action_mask": spaces.MultiBinary(n),
             })
             self.action_spaces[name] = spaces.Discrete(n)

@@ -17,40 +17,47 @@ def parser() -> argparse.ArgumentParser:
     simulate.add_argument("--ticks", type=int, default=200)
     simulate.add_argument("--seed", type=int)
     simulate.add_argument("--config", type=Path)
-    simulate.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer"), default="scripted")
+    simulate.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd"), default="scripted")
     simulate.add_argument("--report", type=Path)
     simulate.add_argument("--trace", type=Path)
     simulate.add_argument("--checkpoint", type=Path)
+    simulate.add_argument("--cow-checkpoint", type=Path,
+                          help="Second checkpoint for learned-herd mode")
     check = sub.add_parser("replay", help="Verify deterministic action trace")
     check.add_argument("--trace", type=Path, required=True)
     view = sub.add_parser("viewer", help="View the world in Pygame (optional extra)")
     view.add_argument("--seed", type=int, default=42)
     view.add_argument("--config", type=Path)
-    view.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer"), default="scripted")
+    view.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd"), default="scripted")
     view.add_argument("--checkpoint", type=Path)
+    view.add_argument("--cow-checkpoint", type=Path,
+                      help="Second checkpoint for learned-herd mode")
     train = sub.add_parser("train-cow", help="Train a shared cow policy with masked PPO")
     train.add_argument("--steps", type=int, default=8192)
     train.add_argument("--seed", type=int, default=42)
     train.add_argument("--worlds", type=int, default=4)
     train.add_argument("--rollout", type=int, default=512)
     train.add_argument("--max-steps", type=int, default=96)
-    train.add_argument("--scenario", choices=("forage", "threat"), default="forage")
+    train.add_argument("--scenario", choices=("forage", "threat", "nomad_herd", "cow_signal"), default="forage")
+    train.add_argument("--cow-calls", action="store_true",
+                       help="Train v2 66-feature cow policy to interpret nomad calls")
     train.add_argument("--output", type=Path, default=Path("runs/cow.pt"))
     evaluate = sub.add_parser("eval-cow", help="Evaluate a frozen cow policy or baseline")
     evaluate.add_argument("--checkpoint", type=Path)
-    evaluate.add_argument("--mode", choices=("policy", "random", "scripted"),
+    evaluate.add_argument("--mode", choices=("policy", "policy_nocalls", "policy_flipped", "random",
+                                           "scripted", "scripted_nocalls", "scripted_flipped"),
                           default="policy")
     evaluate.add_argument("--episodes", type=int, default=20)
     evaluate.add_argument("--seed", type=int, default=100000)
     evaluate.add_argument("--max-steps", type=int, default=96)
-    evaluate.add_argument("--scenario", choices=("forage", "threat"), default="forage")
+    evaluate.add_argument("--scenario", choices=("forage", "threat", "nomad_herd", "cow_signal"), default="forage")
     evaluate.add_argument("--report", type=Path)
     benchmark = sub.add_parser("benchmark-cow", help="Compare policy to two baselines")
     benchmark.add_argument("--checkpoint", type=Path, required=True)
     benchmark.add_argument("--episodes", type=int, default=20)
     benchmark.add_argument("--seed", type=int, default=100000)
     benchmark.add_argument("--max-steps", type=int, default=96)
-    benchmark.add_argument("--scenario", choices=("forage", "threat"), default="forage")
+    benchmark.add_argument("--scenario", choices=("forage", "threat", "nomad_herd", "cow_signal"), default="forage")
     benchmark.add_argument("--report", type=Path)
     farmer_scenarios = ("agriculture", "manure", "refuge", "farmer_mixed")
     train_farmer = sub.add_parser("train-farmer", help="Train farmer PPO with crop/manure/refuge curricula")
@@ -70,8 +77,29 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--scenario", choices=farmer_scenarios, default="agriculture")
         cmd.add_argument("--mode", choices=("policy", "random", "scripted"), default="policy")
         cmd.add_argument("--report", type=Path)
+    nomad_scenarios = ("nomad_herd", "nomad_defend", "nomad_mixed")
+    train_nomad = sub.add_parser("train-nomad", help="Train a nomad with cattle signals and defense")
+    train_nomad.add_argument("--steps", type=int, default=16384)
+    train_nomad.add_argument("--seed", type=int, default=42)
+    train_nomad.add_argument("--worlds", type=int, default=4)
+    train_nomad.add_argument("--rollout", type=int, default=256)
+    train_nomad.add_argument("--max-steps", type=int, default=96)
+    train_nomad.add_argument("--scenario", choices=nomad_scenarios, default="nomad_herd")
+    train_nomad.add_argument("--output", type=Path, default=Path("runs/nomad.pt"))
+    for title in ("eval-nomad", "benchmark-nomad"):
+        cmd = sub.add_parser(title, help="Evaluate a frozen nomad policy and call ablations")
+        cmd.add_argument("--checkpoint", type=Path)
+        cmd.add_argument("--episodes", type=int, default=12)
+        cmd.add_argument("--seed", type=int, default=100000)
+        cmd.add_argument("--max-steps", type=int, default=96)
+        cmd.add_argument("--scenario", choices=nomad_scenarios, default="nomad_herd")
+        cmd.add_argument("--mode", choices=("policy", "policy_greedy", "policy_nocalls", "random",
+                                            "scripted", "scripted_nocalls"), default="policy")
+        cmd.add_argument("--report", type=Path)
     inspect = sub.add_parser("inspect", help="Show one actor's local observation and action mask")
     inspect.add_argument("--seed", type=int, default=42)
+    inspect.add_argument("--cow-calls", action="store_true",
+                         help="Opt into v2 cow call features (legacy v1 is default)")
     inspect.add_argument("--species", choices=("farmer", "cow", "nomad", "scavenger", "ravager"),
                          default="cow")
     return p
@@ -79,6 +107,32 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command in ("train-nomad", "eval-nomad", "benchmark-nomad"):
+        try:
+            from .learning.nomad_ppo import (NomadTrainOptions, train_nomad,
+                                             evaluate_nomad)
+        except ImportError as exc:
+            raise SystemExit("Nomad training requires PyTorch: pip install -e '.[ml]'") from exc
+        if args.command == "train-nomad":
+            result = train_nomad(NomadTrainOptions(
+                steps=args.steps, seed=args.seed, worlds=args.worlds,
+                rollout=args.rollout, max_steps=args.max_steps,
+                scenario=args.scenario), args.output)
+            print(json.dumps({k: v for k, v in result.items()
+                              if k not in ("history", "recent_returns")}, indent=2))
+            return 0
+        modes = (("policy", "policy_greedy", "policy_nocalls", "random", "scripted", "scripted_nocalls")
+                 if args.command == "benchmark-nomad" else (args.mode,))
+        report = {mode: evaluate_nomad(args.checkpoint, episodes=args.episodes,
+                                       seed=args.seed, max_steps=args.max_steps,
+                                       scenario=args.scenario, mode=mode)
+                  for mode in modes}
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps({mode: {k: v for k, v in data.items() if k != "results"}
+                          for mode, data in report.items()}, indent=2))
+        return 0
     if args.command in ("train-farmer", "eval-farmer", "benchmark-farmer"):
         try:
             from .learning.farmer_ppo import (FarmerTrainOptions, train_farmer,
@@ -114,11 +168,18 @@ def main(argv: list[str] | None = None) -> int:
             result = train_cow(TrainOptions(steps=args.steps, seed=args.seed,
                                           worlds=args.worlds, rollout=args.rollout,
                                           max_steps=args.max_steps,
-                                          scenario=args.scenario), args.output)
+                                          scenario=args.scenario,
+                                          cow_calls=args.cow_calls), args.output)
             print(json.dumps({key: value for key, value in result.items()
                               if key not in ("history", "recent_returns")}, indent=2))
             return 0
-        modes = ("policy", "random", "scripted") if args.command == "benchmark-cow" else (args.mode,)
+        modes = (("policy", "policy_nocalls", "policy_flipped", "random", "scripted",
+                  "scripted_nocalls", "scripted_flipped")
+                 if args.command == "benchmark-cow" and args.scenario == "cow_signal"
+                 else ("policy", "policy_nocalls", "random", "scripted", "scripted_nocalls")
+                 if args.command == "benchmark-cow" and args.scenario == "nomad_herd"
+                 else ("policy", "random", "scripted") if args.command == "benchmark-cow"
+                 else (args.mode,))
         report = {mode: evaluate_cow(checkpoint=args.checkpoint,
                                      episodes=args.episodes, seed=args.seed,
                                      scenario=args.scenario, max_steps=args.max_steps,
@@ -136,9 +197,9 @@ def main(argv: list[str] | None = None) -> int:
         from .world import World
         world = World(SimulationConfig(seed=args.seed))
         actor = next(a for a in world.actors.values() if a.species == Species(args.species))
-        state = observe(world, actor)
+        state = observe(world, actor, cow_calls=args.cow_calls)
         print(json.dumps({"actor": actor.id, "species": actor.species.value,
-                          "features": dict(zip(features_for(actor.species),
+                          "features": dict(zip(features_for(actor.species, cow_calls=args.cow_calls),
                                                state["observation"].astype(float).tolist(), strict=True)),
                           "legal_actions": [action.to_dict()
                                             for action, is_legal in zip(ACTIONS[actor.species],
@@ -154,10 +215,12 @@ def main(argv: list[str] | None = None) -> int:
         config = SimulationConfig(**{**config.as_dict(), "seed": args.seed})
     if args.command == "viewer":
         from .viewer import display
-        display(config, mode=args.mode, checkpoint=args.checkpoint)
+        display(config, mode=args.mode, checkpoint=args.checkpoint,
+                cow_checkpoint=args.cow_checkpoint)
         return 0
     world, trace = run(config, ticks=args.ticks, mode=args.mode,
-                       record=args.trace is not None, checkpoint=args.checkpoint)
+                       record=args.trace is not None, checkpoint=args.checkpoint,
+                       cow_checkpoint=args.cow_checkpoint)
     report = world.summary()
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

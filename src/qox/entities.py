@@ -41,6 +41,8 @@ class Actor:
     dung_pending: float = 0.0
     home_id: int | None = None
     sheltered: bool = False
+    friendly_cooldown: int = 0
+    scary_cooldown: int = 0
 
     @property
     def position(self) -> tuple[int, int]:
@@ -74,3 +76,16 @@ class Event:
     detail: str = ""
     x: int | None = None
     y: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CallSignal:
+    """Perceptible local sound. It changes observations, never cow positions."""
+
+    source_id: int
+    kind: str
+    x: int
+    y: int
+    tick: int
+    radius: int
+    intensity: float = 1.0

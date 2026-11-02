@@ -21,16 +21,19 @@ from ..actions import Kind
 from ..agents import scripted_actions
 from ..entities import Species
 from ..envs.core import QoxCoreEnv
-from ..perception import ACTIONS, FEATURES, OBSERVATION_SIZE, OBSERVATION_VERSION
+from ..perception import (ACTIONS, OBSERVATION_VERSION,
+                          COW_CALL_OBSERVATION_VERSION, features_for, observation_size)
 
 
 class CowPolicy(nn.Module):
     """Shared 2-layer MLP policy and state-value estimator."""
 
-    def __init__(self, hidden: int = 64):
+    def __init__(self, hidden: int = 64, cow_calls: bool = False):
         super().__init__()
         self.hidden = hidden
-        self.encoder = nn.Sequential(nn.Linear(OBSERVATION_SIZE, hidden), nn.Tanh(),
+        self.cow_calls = cow_calls
+        self.encoder = nn.Sequential(nn.Linear(observation_size(Species.COW,
+                                                                 cow_calls=cow_calls), hidden), nn.Tanh(),
                                      nn.Linear(hidden, hidden), nn.Tanh())
         self.actor = nn.Linear(hidden, len(ACTIONS[Species.COW]))
         self.critic = nn.Linear(hidden, 1)
@@ -57,6 +60,7 @@ class TrainOptions:
     clip: float = 0.2
     entropy: float = 0.01
     hidden: int = 64
+    cow_calls: bool = False
 
     def __post_init__(self):
         if self.steps < 1 or self.worlds < 1 or self.max_steps < 1:
@@ -65,8 +69,10 @@ class TrainOptions:
             raise ValueError("rollout must be a multiple of worlds")
         if self.epochs < 1 or self.minibatch < 1 or self.hidden < 1:
             raise ValueError("epochs, minibatch and hidden must be positive")
-        if self.scenario not in ("forage", "threat"):
-            raise ValueError("Cow training supports 'forage' or 'threat' only")
+        if self.scenario not in ("forage", "threat", "nomad_herd", "cow_signal"):
+            raise ValueError("Cow training supports forage, threat, nomad_herd, or cow_signal")
+        if self.scenario in ("nomad_herd", "cow_signal") and not self.cow_calls:
+            raise ValueError("herding/cow_signal requires cow_calls=True / v2 observation")
         if not (0 < self.gamma <= 1 and 0 <= self.gae_lambda <= 1 and 0 < self.clip < 1):
             raise ValueError("Invalid PPO hyperparameters")
 
@@ -75,9 +81,11 @@ def _first_cow(env: QoxCoreEnv) -> str:
     return next(name for name in env.possible_agents if name.startswith("cow_"))
 
 
-def _fresh_env(scenario: str, seed: int, max_steps: int) -> QoxCoreEnv:
+def _fresh_env(scenario: str, seed: int, max_steps: int, *,
+               cow_calls: bool = False, allow_nomad_calls: bool = True) -> QoxCoreEnv:
     return QoxCoreEnv(scenario=scenario, max_steps=max_steps,
-                      scripted_others=True, config=None)
+                      scripted_others=True, config=None, cow_calls=cow_calls,
+                      allow_nomad_calls=allow_nomad_calls)
 
 
 def _obs(env: QoxCoreEnv, cow: str) -> dict:
@@ -90,11 +98,12 @@ def train_cow(options: TrainOptions, output: str | Path) -> dict:
     torch.manual_seed(options.seed)
     np.random.seed(options.seed)
     random.seed(options.seed)
-    model = CowPolicy(options.hidden)
+    model = CowPolicy(options.hidden, cow_calls=options.cow_calls)
     optimizer = torch.optim.Adam(model.parameters(), lr=options.lr, eps=1e-5)
 
     environments = [_fresh_env(options.scenario, options.seed + 1009 * j,
-                               options.max_steps) for j in range(options.worlds)]
+                               options.max_steps, cow_calls=options.cow_calls)
+                    for j in range(options.worlds)]
     episode_index = [0] * options.worlds
     names = [_first_cow(env) for env in environments]
     observations = []
@@ -204,8 +213,10 @@ def train_cow(options: TrainOptions, output: str | Path) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"policy_state": model.state_dict(), "optimizer_state": optimizer.state_dict(),
                 "model_hidden": options.hidden,
-                "obs_version": OBSERVATION_VERSION,
-                "observation_features": FEATURES,
+                "obs_version": (COW_CALL_OBSERVATION_VERSION if options.cow_calls
+                                else OBSERVATION_VERSION),
+                "observation_features": features_for(Species.COW,
+                                                     cow_calls=options.cow_calls),
                 "actions": tuple(a.to_dict()["kind"] + (f"_{a.dx}_{a.dy}"
                                                     if a.kind == Kind.MOVE else "")
                                  for a in ACTIONS[Species.COW]),
@@ -219,14 +230,19 @@ def train_cow(options: TrainOptions, output: str | Path) -> dict:
 
 def load_cow(path: str | Path) -> CowPolicy:
     data = torch.load(path, map_location="cpu", weights_only=True)
-    if data["obs_version"] != OBSERVATION_VERSION or tuple(data["observation_features"]) != FEATURES:
+    version = data.get("obs_version")
+    if version not in (OBSERVATION_VERSION, COW_CALL_OBSERVATION_VERSION):
+        raise ValueError("Checkpoint observation schema mismatch")
+    cow_calls = version == COW_CALL_OBSERVATION_VERSION
+    if tuple(data.get("observation_features", ())) != features_for(Species.COW,
+                                                                  cow_calls=cow_calls):
         raise ValueError("Checkpoint observation schema mismatch")
     current_actions = tuple(a.to_dict()["kind"] + (f"_{a.dx}_{a.dy}"
                                                   if a.kind == Kind.MOVE else "")
                             for a in ACTIONS[Species.COW])
     if tuple(data["actions"]) != current_actions:
         raise ValueError("Checkpoint action schema mismatch")
-    model = CowPolicy(int(data["model_hidden"]))
+    model = CowPolicy(int(data["model_hidden"]), cow_calls=cow_calls)
     model.load_state_dict(data["policy_state"])
     model.eval()
     return model
@@ -238,16 +254,21 @@ def evaluate_cow(checkpoint: str | Path | None = None,
                  mode: str = "policy") -> dict:
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes/max_steps must be positive")
-    if mode not in ("policy", "random", "scripted"):
-        raise ValueError("mode must be policy, random, or scripted")
-    if mode == "policy" and checkpoint is None:
+    if mode not in ("policy", "policy_nocalls", "policy_flipped", "random",
+                    "scripted", "scripted_nocalls", "scripted_flipped"):
+        raise ValueError("Unknown cow evaluation mode")
+    if mode.startswith("policy") and checkpoint is None:
         raise ValueError("Policy evaluation needs a checkpoint")
-    model = load_cow(checkpoint) if mode == "policy" else None
+    model = load_cow(checkpoint) if mode.startswith("policy") else None
     selector = np.random.default_rng(seed)
     results = []
     for episode in range(episodes):
-        env = _fresh_env(scenario, seed + episode, max_steps)
+        env = _fresh_env(scenario, seed + episode, max_steps,
+                         cow_calls=(model.cow_calls if model is not None
+                                    else scenario in ("nomad_herd", "cow_signal")),
+                         allow_nomad_calls=not mode.endswith("nocalls"))
         observations, _ = env.reset(seed=seed + episode)
+        env.flip_signal = mode.endswith("flipped")
         cow_name = _first_cow(env)
         ep_return = 0.0
         for _ in range(max_steps):
@@ -255,7 +276,7 @@ def evaluate_cow(checkpoint: str | Path | None = None,
             if mode == "random":
                 valid = np.flatnonzero(obs["action_mask"])
                 action_index = int(selector.choice(valid))
-            elif mode == "scripted":
+            elif mode.startswith("scripted"):
                 action = scripted_actions(env.world)[env.name_to_id[cow_name]]
                 try:
                     action_index = ACTIONS[Species.COW].index(action)
@@ -276,13 +297,35 @@ def evaluate_cow(checkpoint: str | Path | None = None,
         cow = env.world.actors.get(env.name_to_id[cow_name])
         graze = sum(ev.amount for ev in env.world.events
                     if ev.actor_id == env.name_to_id[cow_name] and ev.kind == "graze")
-        results.append({"seed": seed + episode, "return": round(ep_return, 4),
-                        "grazed": round(graze, 4), "alive": cow is not None,
-                        "final_energy": round(cow.energy, 4) if cow else 0,
-                        "ticks": env.world.tick})
-    return {"mode": mode, "scenario": scenario, "seed_start": seed,
-            "episodes": episodes, "mean_return": round(float(np.mean([x["return"] for x in results])), 4),
-            "mean_grazed": round(float(np.mean([x["grazed"] for x in results])), 4),
-            "survival_rate": round(float(np.mean([x["alive"] for x in results])), 4),
-            "mean_final_energy": round(float(np.mean([x["final_energy"] for x in results])), 4),
-            "results": results}
+        entry = {"seed": seed + episode, "return": round(ep_return, 4),
+                 "grazed": round(graze, 4), "alive": cow is not None,
+                 "final_energy": round(cow.energy, 4) if cow else 0,
+                 "in_pasture": int(env.name_to_id[cow_name] in env.reached_goal_ids),
+                 "calls": sum(ev.kind in ("friendly_call", "scary_call")
+                              for ev in env.world.events),
+                 "ticks": env.world.tick}
+        if scenario == "cow_signal":
+            goal = env.world.herd_goal
+            entry["signal_type"] = env.signal_kind.value
+            entry["final_goal_distance"] = (abs(cow.x - goal[0]) + abs(cow.y - goal[1])
+                                            if cow else None)
+        results.append(entry)
+    summary = {"mode": mode, "scenario": scenario, "seed_start": seed,
+               "episodes": episodes, "mean_return": round(float(np.mean([x["return"] for x in results])), 4),
+               "mean_grazed": round(float(np.mean([x["grazed"] for x in results])), 4),
+               "survival_rate": round(float(np.mean([x["alive"] for x in results])), 4),
+               "pasture_arrival_rate": round(float(np.mean([x["in_pasture"] for x in results])), 4),
+               "mean_calls": round(float(np.mean([x["calls"] for x in results])), 4),
+               "mean_final_energy": round(float(np.mean([x["final_energy"] for x in results])), 4),
+               "results": results}
+    if scenario == "cow_signal":
+        summary["arrival_by_signal"] = {
+            kind: round(float(np.mean([x["in_pasture"] for x in results
+                                       if x["signal_type"] == kind])), 4)
+            for kind in ("friendly_call", "scary_call")
+            if any(x["signal_type"] == kind for x in results)
+        }
+        summary["mean_final_goal_distance"] = round(float(np.mean([
+            x["final_goal_distance"] for x in results
+            if x["final_goal_distance"] is not None])), 4)
+    return summary

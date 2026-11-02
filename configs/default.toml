@@ -20,3 +20,13 @@ crop_growth = 0.55
 waste_decay = 0.12
 cow_metabolism = 0.045
 refuge_ration = 0.02
+
+# M5 nomad communication and movement/combat tuning
+call_radius = 6
+call_duration = 3
+call_cooldown = 5
+friendly_call_stamina = 2.5
+scary_call_stamina = 4.5
+nomad_dash_stamina = 3.0
+nomad_attack_stamina = 5.0
+nomad_attack_damage = 8.0

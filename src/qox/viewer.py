@@ -18,7 +18,7 @@ COLORS = {
 
 
 def display(config: SimulationConfig, mode: str = "scripted",
-            checkpoint=None) -> None:
+            checkpoint=None, cow_checkpoint=None) -> None:
     try:
         import pygame
     except ImportError as exc:
@@ -34,12 +34,17 @@ def display(config: SimulationConfig, mode: str = "scripted",
     clock = pygame.time.Clock()
     world = World(config)
     controller = None
-    if mode in ("learned-cow", "learned-farmer"):
+    if mode in ("learned-cow", "learned-farmer", "learned-nomad", "learned-herd"):
         if checkpoint is None:
             raise ValueError("--checkpoint is required for learned actor mode")
-        from .learning.inference import CowController, FarmerController
+        from .learning.inference import (CowController, FarmerController,
+                                         NomadController, HerdController)
+        if mode == "learned-herd" and cow_checkpoint is None:
+            raise ValueError("--cow-checkpoint required for learned-herd")
         controller = (CowController(checkpoint) if mode == "learned-cow"
-                      else FarmerController(checkpoint))
+                      else FarmerController(checkpoint) if mode == "learned-farmer"
+                      else NomadController(checkpoint) if mode == "learned-nomad"
+                      else HerdController(checkpoint, cow_checkpoint))
     selected_id = None
     paused = False
     single_step = False
@@ -82,6 +87,17 @@ def display(config: SimulationConfig, mode: str = "scripted",
                     pygame.draw.circle(screen, (95, 65, 40),
                                        (x * tile_px + tile_px // 2,
                                         y * tile_px + tile_px // 2), max(2, tile_px // 6))
+        # Show audible nomad calls as short-lived expanding circles.
+        for sound in world.calls:
+            fraction = max(0.2, 1 - (world.tick - sound.tick) /
+                           (world.config.call_duration + 1))
+            ring_radius = int(sound.radius * tile_px * fraction)
+            ring_color = ((90, 195, 255) if sound.kind == "friendly_call"
+                          else (255, 125, 90))
+            pygame.draw.circle(screen, ring_color,
+                               (sound.x * tile_px + tile_px // 2,
+                                sound.y * tile_px + tile_px // 2),
+                               max(2, ring_radius), width=1)
         for settlement in world.settlements:
             pygame.draw.rect(screen, (72, 64, 142),
                              (settlement.x * tile_px, settlement.y * tile_px,
@@ -116,13 +132,18 @@ def display(config: SimulationConfig, mode: str = "scripted",
                     f"stamina:{selected.stamina:.1f}"
                     f" {'SHELTERED' if selected.sheltered else 'outside'}")
             controlled = (Species.COW if mode == "learned-cow" else
-                          Species.FARMER if mode == "learned-farmer" else None)
-            if controller and selected.species == controlled:
+                          Species.FARMER if mode == "learned-farmer" else
+                          Species.NOMAD if mode == "learned-nomad" else None)
+            is_controlled = (controller is not None and
+                             (selected.species == controlled or
+                              (mode == "learned-herd" and selected.species in
+                               (Species.COW, Species.NOMAD))))
+            if is_controlled:
                 from .perception import ACTIONS
                 probabilities = controller.probabilities(world, selected.id)
                 best = sorted(range(len(probabilities)),
                               key=lambda i: probabilities[i], reverse=True)[:2]
-                info += "  " + " ".join(f"{ACTIONS[controlled][i].kind.value}:"
+                info += "  " + " ".join(f"{ACTIONS[selected.species][i].kind.value}:"
                                        f"{probabilities[i]:.2f}" for i in best)
             screen.blit(font.render(info, True, (230, 230, 230)), (9, height + 52))
         else:
