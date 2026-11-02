@@ -190,7 +190,7 @@ def display(config: SimulationConfig, mode: str = "scripted",
                 probabilities = controller.probabilities(world, selected.id)
                 best = sorted(range(len(probabilities)),
                               key=lambda i: probabilities[i], reverse=True)[:2]
-                info += "  " + " ".join(f"{action_catalog(selected.species, festivals=(mode == "learned-festival"))[i].kind.value}:"
+                info += "  " + " ".join(f"{action_catalog(selected.species, festivals=(mode == 'learned-festival'))[i].kind.value}:"
                                        f"{probabilities[i]:.2f}" for i in best)
             screen.blit(font.render(info, True, (230, 230, 230)), (9, height + 52))
         else:
