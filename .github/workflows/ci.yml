@@ -29,3 +29,5 @@ jobs:
       - run: python -m pytest -q tests/test_learning.py
       - run: qox train-cow --steps 256 --worlds 2 --rollout 64 --output runs/ci-cow.pt
       - run: qox benchmark-cow --checkpoint runs/ci-cow.pt --episodes 2 --seed 90000
+      - run: qox train-farmer --steps 256 --worlds 2 --rollout 64 --scenario farmer_mixed --output runs/ci-farmer.pt
+      - run: qox benchmark-farmer --checkpoint runs/ci-farmer.pt --scenario refuge --episodes 2 --seed 90000

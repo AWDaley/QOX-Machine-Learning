@@ -33,7 +33,22 @@ FEATURES = (
     "waste_scent_dx", "waste_scent_dy", "waste_scent_strength",
     "recent_noise_dx", "recent_noise_dy", "recent_noise_strength",
 )
-OBSERVATION_SIZE = len(FEATURES)
+OBSERVATION_SIZE = len(FEATURES)  # Legacy cow observation contract remains v1/60.
+FARMER_FEATURES = (
+    "sheltered", "home_entrance_near", "home_food_known", "home_food_stock",
+    "home_refuge_fill", "here_planted", "here_crop_ready", "ripe_seen",
+    "ripe_dx", "ripe_dy", "ripe_amount", "waste_seen", "waste_dx",
+    "waste_dy", "waste_amount", "home_global_distance",
+)
+FARMER_OBSERVATION_VERSION = 1
+
+
+def features_for(species: Species) -> tuple[str, ...]:
+    return FEATURES + FARMER_FEATURES if species == Species.FARMER else FEATURES
+
+
+def observation_size(species: Species) -> int:
+    return len(features_for(species))
 
 
 def _catalog(*kinds: Kind) -> tuple[Action, ...]:
@@ -43,7 +58,7 @@ def _catalog(*kinds: Kind) -> tuple[Action, ...]:
 
 ACTIONS: dict[Species, tuple[Action, ...]] = {
     Species.FARMER: _catalog(Kind.PLANT, Kind.HARVEST, Kind.COLLECT_WASTE,
-                             Kind.FERTILIZE, Kind.EAT, Kind.DEPOSIT),
+                             Kind.FERTILIZE, Kind.EAT, Kind.DEPOSIT, Kind.ENTER_REFUGE),
     Species.COW: _catalog(Kind.GRAZE),
     Species.NOMAD: _catalog(Kind.MILK, Kind.EAT),
     Species.SCAVENGER: _catalog(Kind.EAT, Kind.EAT_CARCASS),
@@ -104,6 +119,9 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
     for action in ACTIONS[actor.species]:
         kind = action.kind
         valid = True
+        if actor.sheltered and kind not in (Kind.WAIT, Kind.MOVE, Kind.REST, Kind.EAT, Kind.DEPOSIT):
+            mask.append(0)
+            continue
         if kind == Kind.MOVE:
             x, y = actor.x + action.dx, actor.y + action.dy
             valid = (actor.stamina >= 0.5 and world.grid.contains(x, y)
@@ -111,6 +129,12 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
                      and not any((s.x, s.y) == (x, y) for s in world.settlements))
         elif kind == Kind.GRAZE:
             valid = tile.grass > 0.01 or tile.crop > 0.01
+        elif kind == Kind.ENTER_REFUGE:
+            home = world.home(actor)
+            valid = (actor.species == Species.FARMER and not actor.sheltered
+                     and actor.stamina >= 1 and home is not None
+                     and abs(actor.x - home.x) + abs(actor.y - home.y) <= 1
+                     and world.refuge_occupants(home.id) < home.refuge_capacity)
         elif kind == Kind.PLANT:
             valid = not tile.planted and tile.fertility >= 0.2 and actor.carried_food >= 0.3
         elif kind == Kind.HARVEST:
@@ -136,6 +160,7 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
         elif kind == Kind.ATTACK:
             valid = actor.stamina >= 4 and any(
                 a.id != actor.id and a.species != Species.RAVAGER
+                and not a.sheltered
                 and abs(a.x - actor.x) + abs(a.y - actor.y) <= 1
                 for a in world.actors.values())
         mask.append(int(valid))
@@ -247,9 +272,48 @@ def observe(world: World, actor: Actor) -> dict[str, np.ndarray]:
     else:
         values.extend([0, 0, 0])
 
+    if actor.species == Species.FARMER:
+        home = world.home(actor)
+        adjacent = (home is not None and
+                    abs(home.x - actor.x) + abs(home.y - actor.y) <= 1)
+        can_inspect_store = bool(adjacent or actor.sheltered)
+        crops = []
+        waste = []
+        for y in range(max(0, actor.y - VISION_RADIUS),
+                       min(world.grid.height, actor.y + VISION_RADIUS + 1)):
+            for x in range(max(0, actor.x - VISION_RADIUS),
+                           min(world.grid.width, actor.x + VISION_RADIUS + 1)):
+                if not _visible(world, actor, x, y):
+                    continue
+                seen_tile = world.grid.get(x, y)
+                dist = abs(x - actor.x) + abs(y - actor.y)
+                if seen_tile.planted and seen_tile.crop >= 1:
+                    crops.append((dist, y, x, seen_tile.crop))
+                if seen_tile.waste > 0.02:
+                    waste.append((dist, y, x, seen_tile.waste))
+        def target_features(choices: list[tuple[int, int, int, float]], scale: float):
+            if not choices:
+                return [0, 0, 0, 0]
+            _, y, x, amt = min(choices)
+            dx, dy, _ = _direction(actor, x, y)
+            return [1, dx, dy, min(1, amt / scale)]
+
+        values.extend([
+            float(actor.sheltered), float(adjacent), float(can_inspect_store),
+            min(1, home.stored_food / 25) if can_inspect_store and home else 0,
+            (world.refuge_occupants(home.id) / max(1, home.refuge_capacity))
+            if can_inspect_store and home else 0,
+            float(tile.planted) if not actor.sheltered else 0,
+            min(1, tile.crop / world.config.max_crop) if not actor.sheltered else 0,
+            *target_features(crops, world.config.max_crop),
+            *target_features(waste, world.config.max_waste),
+            (min(1, (abs(home.x - actor.x) + abs(home.y - actor.y)) /
+                 (world.grid.width + world.grid.height)) if home else 0),
+        ])
     result = np.asarray(values, dtype=np.float32)
-    if result.shape != (OBSERVATION_SIZE,):
-        raise AssertionError(f"Broken observation schema: {len(result)} != {OBSERVATION_SIZE}")
+    expected = observation_size(actor.species)
+    if result.shape != (expected,):
+        raise AssertionError(f"Broken observation schema: {len(result)} != {expected}")
     return {"observation": result, "action_mask": legal_action_mask(world, actor)}
 
 

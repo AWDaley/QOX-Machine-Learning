@@ -29,7 +29,7 @@ class QoxCoreEnv:
                  scenario: str = "natural", scripted_others: bool = False):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat"):
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed"):
             raise ValueError(f"Unknown scenario: {scenario}")
         if config is None:
             if scenario == "forage":
@@ -40,6 +40,13 @@ class QoxCoreEnv:
                 config = SimulationConfig(width=12, height=12, farmers=0, cows=2,
                                           nomads=0, scavengers=0, ravagers=1,
                                           cow_metabolism=0.7)
+            elif scenario in ("agriculture", "manure", "farmer_mixed"):
+                config = SimulationConfig(width=12, height=12, farmers=1, cows=1,
+                                          nomads=0, scavengers=0, ravagers=0,
+                                          crop_growth=0.42, grass_growth=0.32)
+            elif scenario == "refuge":
+                config = SimulationConfig(width=12, height=12, farmers=1, cows=0,
+                                          nomads=0, scavengers=0, ravagers=1)
             else:
                 config = SimulationConfig()
         self.config = config
@@ -59,7 +66,15 @@ class QoxCoreEnv:
         if options is not None and not isinstance(options, dict):
             raise TypeError("reset options must be a dictionary or None")
         seed = self.config.seed if seed is None else int(seed)
-        self.world = World(replace(self.config, seed=seed))
+        config = self.config
+        if self.scenario == "farmer_mixed":
+            # Training-only curriculum: instantiate the correct finite
+            # population for each task rather than leave extra predators
+            # loose in the agriculture task.
+            refuge_episode = seed % 3 == 1
+            config = replace(config, cows=0 if refuge_episode else 1,
+                             ravagers=1 if refuge_episode else 0)
+        self.world = World(replace(config, seed=seed))
         if self.scenario != "natural":
             self._scenario_setup(seed)
         self.possible_agents = [get_agent_name(a) for a in self.world.actors.values()]
@@ -74,6 +89,9 @@ class QoxCoreEnv:
         starting patches are in world state, not hidden knowledge to a policy.
         """
         rng = random.Random(seed ^ 0x45AB90)
+        if self.scenario in ("agriculture", "refuge", "manure", "farmer_mixed"):
+            self._farmer_scenario(rng, seed)
+            return
         for tile in self.world.grid.tiles:
             tile.crop = 0.0
             tile.planted = False
@@ -101,6 +119,54 @@ class QoxCoreEnv:
                           if (x, y) not in occupied and (x, y) not in entrances]
                 if places:
                     predator.x, predator.y = rng.choice(places)
+        self.world.check_invariants()
+
+    def _farmer_scenario(self, rng: random.Random, seed: int) -> None:
+        """Small, concrete curriculum tasks with independent physics RNG.
+
+        The modes differ in the world they create, not the farmer's action set.
+        A mixed episode alternates task types using the seed; the observation
+        never provides a hidden scenario label.
+        """
+        mode = ("agriculture", "refuge", "manure")[seed % 3] if self.scenario == "farmer_mixed" else self.scenario
+        home = self.world.settlements[0]
+        farmer = next(a for a in self.world.actors.values()
+                      if a.species == Species.FARMER)
+        farmer.x, farmer.y = home.x + 1, home.y
+        farmer.carried_food = 1.2
+        farmer.energy = 70.0
+        home.stored_food = 2.0
+        for tile in self.world.grid.tiles:
+            tile.crop, tile.waste, tile.planted = 0.0, 0.0, False
+            tile.fertility = 0.45
+            tile.grass = 0.2
+        fields = [(home.x + 1, home.y), (home.x + 2, home.y),
+                  (home.x + 1, home.y + 1), (home.x + 1, home.y - 1),
+                  (home.x - 1, home.y), (home.x - 1, home.y + 1)]
+        for i, (x, y) in enumerate(fields):
+            tile = self.world.grid.get(x, y)
+            tile.fertility = 0.65 + 0.23 * rng.random()
+            if i not in (1, 5):
+                tile.planted = True
+                tile.crop = 1.3 + 1.8 * rng.random()
+        if mode == "manure":
+            tile = self.world.grid.get(*farmer.position)
+            tile.planted, tile.crop, tile.fertility, tile.waste = False, 0, 0.19, 1.8
+            self.world.grid.get(home.x + 2, home.y).waste = 2
+            home.stored_food = 1.0
+        if mode == "agriculture":
+            self.world.grid.get(home.x + 2, home.y).waste = 0.8
+        if mode == "refuge":
+            ravager = next(a for a in self.world.actors.values()
+                           if a.species == Species.RAVAGER)
+            ravager.x, ravager.y = home.x + 3, home.y
+            home.stored_food = 4.0
+        else:
+            cow = next((a for a in self.world.actors.values()
+                        if a.species == Species.COW), None)
+            if cow:
+                cow.x, cow.y = home.x + 3, home.y + 1
+                self.world.grid.get(*cow.position).grass = 4.5
         self.world.check_invariants()
 
     def _observations(self) -> dict:
@@ -151,10 +217,16 @@ class QoxCoreEnv:
                 # full energy. One biomass unit supplies 2.4 energy units.
                 useful = min(event.amount, max(0.0, 100.0 - old_energy[name]) / 2.4)
                 value = 0.45 * useful
-            elif event.kind in ("harvest", "eat_waste", "eat_carcass", "milk"):
+            elif event.kind == "harvest":
+                value = 0.12 * event.amount
+            elif event.kind == "fertilize":
+                # Credit only real finite manure applied to depleted soil.
+                # This is weak shaping; harvest/food-storage outcomes dominate.
+                value = 0.025 * event.amount
+            elif event.kind in ("eat_waste", "eat_carcass", "milk"):
                 value = 0.15 * event.amount
             elif event.kind == "deposit":
-                value = 0.05 * event.amount
+                value = 0.55 * event.amount
             else:
                 value = 0.0
             rewards[name] += value
@@ -171,8 +243,9 @@ class QoxCoreEnv:
                 terminations[name] = False
                 health_lost = max(0.0, old_health[name] - actor.health)
                 if health_lost:
-                    rewards[name] -= 0.025 * health_lost
-                    components[name]["injury"] = -0.025 * health_lost
+                    injury_weight = 0.07 if name.startswith("farmer_") else 0.025
+                    rewards[name] -= injury_weight * health_lost
+                    components[name]["injury"] = -injury_weight * health_lost
                 # No reward for merely existing or cyclically increasing an
                 # already full energy bar; finite intake is directly rewarded.
             truncations[name] = self.world.tick >= self.max_steps

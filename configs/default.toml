@@ -19,3 +19,4 @@ grass_growth = 0.45
 crop_growth = 0.55
 waste_decay = 0.12
 cow_metabolism = 0.045
+refuge_ration = 0.02

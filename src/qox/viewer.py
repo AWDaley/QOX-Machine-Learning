@@ -34,11 +34,12 @@ def display(config: SimulationConfig, mode: str = "scripted",
     clock = pygame.time.Clock()
     world = World(config)
     controller = None
-    if mode == "learned-cow":
+    if mode in ("learned-cow", "learned-farmer"):
         if checkpoint is None:
-            raise ValueError("--checkpoint is required for learned-cow mode")
-        from .learning.inference import CowController
-        controller = CowController(checkpoint)
+            raise ValueError("--checkpoint is required for learned actor mode")
+        from .learning.inference import CowController, FarmerController
+        controller = (CowController(checkpoint) if mode == "learned-cow"
+                      else FarmerController(checkpoint))
     selected_id = None
     paused = False
     single_step = False
@@ -90,10 +91,17 @@ def display(config: SimulationConfig, mode: str = "scripted",
                                (carcass.x * tile_px + tile_px // 2,
                                 carcass.y * tile_px + tile_px // 2), tile_px // 3)
         for actor in world.actors.values():
+            if actor.sheltered:
+                continue  # occupants are represented by the settlement badge
             cx, cy = actor.x * tile_px + tile_px // 2, actor.y * tile_px + tile_px // 2
             pygame.draw.circle(screen, COLORS[actor.species], (cx, cy), max(3, tile_px // 3))
             if actor.species == Species.COW:
                 pygame.draw.circle(screen, (30, 30, 30), (cx, cy), max(1, tile_px // 9))
+        for settlement in world.settlements:
+            count = world.refuge_occupants(settlement.id)
+            if count:
+                label = font.render(str(count), True, (255, 245, 210))
+                screen.blit(label, (settlement.x * tile_px, settlement.y * tile_px))
         pygame.draw.rect(screen, (18, 23, 29), (0, height, width, 78))
         populations = world.summary()["population"]
         line1 = f"Tick {world.tick}  {'PAUSED' if paused else 'RUNNING'}  {fps} TPS"
@@ -105,13 +113,16 @@ def display(config: SimulationConfig, mode: str = "scripted",
         if selected is not None:
             info = (f"#{selected.id} {selected.species.value}  "
                     f"energy:{selected.energy:.1f} hp:{selected.health:.1f} "
-                    f"stamina:{selected.stamina:.1f}")
-            if controller and selected.species == Species.COW:
+                    f"stamina:{selected.stamina:.1f}"
+                    f" {'SHELTERED' if selected.sheltered else 'outside'}")
+            controlled = (Species.COW if mode == "learned-cow" else
+                          Species.FARMER if mode == "learned-farmer" else None)
+            if controller and selected.species == controlled:
                 from .perception import ACTIONS
                 probabilities = controller.probabilities(world, selected.id)
                 best = sorted(range(len(probabilities)),
                               key=lambda i: probabilities[i], reverse=True)[:2]
-                info += "  " + " ".join(f"{ACTIONS[Species.COW][i].kind.value}:"
+                info += "  " + " ".join(f"{ACTIONS[controlled][i].kind.value}:"
                                        f"{probabilities[i]:.2f}" for i in best)
             screen.blit(font.render(info, True, (230, 230, 230)), (9, height + 52))
         else:

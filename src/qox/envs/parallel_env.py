@@ -10,7 +10,7 @@ from gymnasium import spaces
 from pettingzoo.utils.env import ParallelEnv
 
 from ..config import SimulationConfig
-from ..perception import ACTIONS, OBSERVATION_SIZE
+from ..perception import ACTIONS, observation_size
 from .core import QoxCoreEnv
 
 
@@ -23,6 +23,9 @@ class QoxParallelEnv(ParallelEnv):
                  render_mode: str | None = None):
         if render_mode not in (None, "ansi"):
             raise ValueError("Only ANSI rendering is currently available")
+        if scenario == "farmer_mixed":
+            raise ValueError("farmer_mixed changes agent populations across resets; "
+                             "use the fixed agriculture/refuge/manure scenarios for PettingZoo")
         self.render_mode = render_mode
         self.core = QoxCoreEnv(config, max_steps, scenario)
         self.possible_agents = list(self.core.possible_agents)
@@ -34,7 +37,7 @@ class QoxParallelEnv(ParallelEnv):
             n = len(ACTIONS[actor.species])
             self.observation_spaces[name] = spaces.Dict({
                 "observation": spaces.Box(low=-1, high=1,
-                                           shape=(OBSERVATION_SIZE,), dtype=np.float32),
+                                           shape=(observation_size(actor.species),), dtype=np.float32),
                 "action_mask": spaces.MultiBinary(n),
             })
             self.action_spaces[name] = spaces.Discrete(n)
