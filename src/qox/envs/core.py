@@ -33,7 +33,7 @@ class QoxCoreEnv:
                  nomad_v2: bool = False):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed"):
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed", "scavenger_waste", "scavenger_carrion", "scavenger_competition", "scavenger_mixed"):
             raise ValueError(f"Unknown scenario: {scenario}")
         if config is None:
             if scenario == "forage":
@@ -61,6 +61,13 @@ class QoxCoreEnv:
                 config = SimulationConfig(width=20, height=20, farmers=0, cows=1,
                                           nomads=1, scavengers=0, ravagers=0,
                                           cow_metabolism=0.12, grass_growth=0.0)
+            elif scenario.startswith("scavenger_"):
+                contest = scenario in ("scavenger_competition", "scavenger_mixed")
+                config = SimulationConfig(width=16, height=14,
+                                          farmers=int(contest), cows=int(contest),
+                                          nomads=0, scavengers=1, ravagers=0,
+                                          waste_decay=0.06, ecology_interval=5,
+                                          grass_growth=0.06)
             elif scenario == "refuge":
                 config = SimulationConfig(width=12, height=12, farmers=1, cows=0,
                                           nomads=0, scavengers=0, ravagers=1)
@@ -117,6 +124,9 @@ class QoxCoreEnv:
                              ravagers=1 if refuge_episode else 0)
         if self.scenario == "ravager_mixed":
             config = replace(config, cows=int(seed % 3 == 0), nomads=2 * int(seed % 3 == 1))
+        if self.scenario == "scavenger_mixed":
+            config = replace(config, farmers=int(seed % 3 == 2),
+                             cows=int(seed % 3 == 2))
         self.world = World(replace(config, seed=seed))
         if self.scenario != "natural":
             self._scenario_setup(seed)
@@ -139,6 +149,9 @@ class QoxCoreEnv:
             return
         if self.scenario.startswith("ravager_"):
             self._ravager_scenario(rng, seed)
+            return
+        if self.scenario.startswith("scavenger_"):
+            self._scavenger_scenario(rng, seed)
             return
         if self.scenario == "cow_signal":
             self._cow_signal_scenario(rng)
@@ -176,6 +189,54 @@ class QoxCoreEnv:
                           if (x, y) not in occupied and (x, y) not in entrances]
                 if places:
                     predator.x, predator.y = rng.choice(places)
+        self.world.check_invariants()
+
+    def _scavenger_scenario(self, rng: random.Random, seed: int) -> None:
+        """M7 seeded finite-food tasks: waste, carrion, and farmer competition.
+
+        Scavengers are never given the target coordinates in observations.
+        Food patches are detectable only through normal sight and odor.
+        """
+        from ..entities import Carcass
+
+        kind = (("scavenger_waste", "scavenger_carrion", "scavenger_competition")
+                [seed % 3] if self.scenario == "scavenger_mixed" else self.scenario)
+        self.scavenger_episode_mode = kind
+        scavenger = next(a for a in self.world.actors.values()
+                         if a.species == Species.SCAVENGER)
+        scavenger.x, scavenger.y = (7, 6)
+        scavenger.energy, scavenger.health = 38.0, 100.0
+        scavenger.dung_pending = 0.0
+        for tile in self.world.grid.tiles:
+            tile.planted, tile.crop, tile.waste = False, 0.0, 0.0
+            tile.grass, tile.fertility, tile.cover = 0.04, 0.32, 0.0
+        self.world.carcasses.clear()
+        if kind == "scavenger_competition":
+            source = (9, 6)
+            farmer = next(a for a in self.world.actors.values()
+                          if a.species == Species.FARMER)
+            farmer.x, farmer.y = (10, 6) if seed % 2 else (10, 7)
+            farmer.carried_waste = 0.0
+            farmer.carried_food = 1.5
+            cow = next(a for a in self.world.actors.values()
+                       if a.species == Species.COW)
+            cow.x, cow.y = 10, 9
+            cow.dung_pending = 0.4  # finite preexisting cow output
+            self.world.grid.get(*cow.position).grass = 7.0
+            self.world.grid.get(*cow.position).fertility = 0.72
+            self.world.grid.get(*farmer.position).fertility = 0.25
+            self.world.grid.get(*source).waste = 5.0
+        else:
+            dx, dy = rng.choice(((1, 0), (-1, 0), (0, 1), (0, -1)))
+            distance = rng.choice((2, 3))
+            source = (scavenger.x + distance * dx,
+                      scavenger.y + distance * dy)
+            if kind == "scavenger_waste":
+                self.world.grid.get(*source).waste = 5.0
+            else:
+                cid = self.world.next_carcass_id
+                self.world.carcasses[cid] = Carcass(cid, *source, 10.0, Species.COW)
+                self.world.next_carcass_id += 1
         self.world.check_invariants()
 
     def _ravager_scenario(self, rng: random.Random, seed: int) -> None:
@@ -428,6 +489,29 @@ class QoxCoreEnv:
                     for aid, a in self.world.actors.items() if a.species == Species.COW}
         # Optional, very small potential-based pursuit shaping for the ravager
         # curriculum. Targets must be locally perceptible, not omniscient.
+        scavenger_targets: dict[int, tuple[tuple[int, int], tuple[int, int]]] = {}
+        if self.scenario.startswith("scavenger_"):
+            # Credit approach only to resources that are already sensed.
+            from ..perception import _visible
+            for scavenger in self.world.actors.values():
+                if scavenger.species != Species.SCAVENGER:
+                    continue
+                targets = []
+                for y in range(max(0, scavenger.y - 4),
+                               min(self.world.grid.height, scavenger.y + 5)):
+                    for x in range(max(0, scavenger.x - 4),
+                                   min(self.world.grid.width, scavenger.x + 5)):
+                        dist = abs(x - scavenger.x) + abs(y - scavenger.y)
+                        if self.world.grid.get(x, y).waste > 0.05 and _visible(
+                                self.world, scavenger, x, y):
+                            targets.append((dist, y, x))
+                for carcass in self.world.carcasses.values():
+                    dist = abs(carcass.x - scavenger.x) + abs(carcass.y - scavenger.y)
+                    if carcass.carrier_id is None and dist <= 7:
+                        targets.append((dist, carcass.y, carcass.x))
+                if targets:
+                    _, ty, tx = min(targets)
+                    scavenger_targets[scavenger.id] = (scavenger.position, (tx, ty))
         ravager_target_distances: dict[int, tuple[tuple[int, int], str, int]] = {}
         if self.scenario.startswith("ravager_"):
             from ..perception import _visible_actor
@@ -501,6 +585,16 @@ class QoxCoreEnv:
         components: dict[str, dict[str, float]] = {name: defaultdict(float)
                                                         for name in previous}
         id_to_name = {aid: name for name, aid in self.name_to_id.items()}
+        for aid, (old_pos, target) in scavenger_targets.items():
+            actor = self.world.actors.get(aid)
+            name = id_to_name.get(aid)
+            if actor is None or name not in rewards:
+                continue
+            delta = ((abs(old_pos[0] - target[0]) + abs(old_pos[1] - target[1]))
+                     - (abs(actor.x - target[0]) + abs(actor.y - target[1])))
+            value = 0.07 * delta  # Signed potential; no reward for repeated cycling.
+            rewards[name] += value
+            components[name]["scavenging_progress"] += value
         for aid, (old_pos, kind, target_id) in ravager_target_distances.items():
             actor = self.world.actors.get(aid)
             target = (self.world.actors.get(target_id) if kind == "actor"
@@ -531,8 +625,16 @@ class QoxCoreEnv:
                 # This is weak shaping; harvest/food-storage outcomes dominate.
                 value = 0.025 * event.amount
             elif event.kind in ("eat_waste", "eat_carcass", "milk"):
-                value = (0.50 if name.startswith("ravager_") and
-                         event.kind == "eat_carcass" else 0.15) * event.amount
+                if name.startswith("scavenger_"):
+                    efficiency = 2.2 if event.kind == "eat_waste" else 4.0
+                    # Reward real nutrition within the available energy deficit,
+                    # never eating while full or cycling uneaten waste.
+                    usable = min(event.amount,
+                                 max(0.0, 100 - old_energy[name]) / efficiency)
+                    value = 0.65 * usable
+                else:
+                    value = (0.50 if name.startswith("ravager_") and
+                             event.kind == "eat_carcass" else 0.15) * event.amount
             elif event.kind == "charge_hit" and name.startswith("ravager_"):
                 value = 0.012 * event.amount
             elif event.kind == "deposit":

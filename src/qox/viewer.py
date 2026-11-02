@@ -35,17 +35,19 @@ def display(config: SimulationConfig, mode: str = "scripted",
     world = World(config)
     controller = None
     if mode in ("learned-cow", "learned-farmer", "learned-nomad", "learned-herd",
-                "learned-ravager"):
+                "learned-ravager", "learned-scavenger"):
         if checkpoint is None:
             raise ValueError("--checkpoint is required for learned actor mode")
         from .learning.inference import (CowController, FarmerController,
-                                         NomadController, HerdController, RavagerController)
+                                         NomadController, HerdController, RavagerController,
+                                         ScavengerController)
         if mode == "learned-herd" and cow_checkpoint is None:
             raise ValueError("--cow-checkpoint required for learned-herd")
         controller = (CowController(checkpoint) if mode == "learned-cow"
                       else FarmerController(checkpoint) if mode == "learned-farmer"
                       else NomadController(checkpoint) if mode == "learned-nomad"
                       else RavagerController(checkpoint) if mode == "learned-ravager"
+                      else ScavengerController(checkpoint) if mode == "learned-scavenger"
                       else HerdController(checkpoint, cow_checkpoint))
     selected_id = None
     paused = False
@@ -148,7 +150,8 @@ def display(config: SimulationConfig, mode: str = "scripted",
             controlled = (Species.COW if mode == "learned-cow" else
                           Species.FARMER if mode == "learned-farmer" else
                           Species.NOMAD if mode == "learned-nomad" else
-                          Species.RAVAGER if mode == "learned-ravager" else None)
+                          Species.RAVAGER if mode == "learned-ravager" else
+                          Species.SCAVENGER if mode == "learned-scavenger" else None)
             is_controlled = (controller is not None and
                              (selected.species == controlled or
                               (mode == "learned-herd" and selected.species in

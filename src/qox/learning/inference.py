@@ -162,3 +162,30 @@ class HerdController:
                         break
                 orders[actor.id] = ACTIONS[Species.NOMAD][choice]
         return orders
+
+
+class ScavengerController:
+    """Run a frozen scavenger PPO policy; keep other roles scripted."""
+
+    def __init__(self, checkpoint: str | Path):
+        from .scavenger_ppo import load_scavenger
+        self.model = load_scavenger(checkpoint)
+
+    def probabilities(self, world: World, actor_id: int) -> list[float]:
+        actor = world.actors[actor_id]
+        if actor.species != Species.SCAVENGER:
+            raise ValueError("ScavengerController only controls scavengers")
+        state = observe(world, actor)
+        with torch.no_grad():
+            dist, _ = self.model(torch.as_tensor(state["observation"]).unsqueeze(0),
+                                 torch.as_tensor(state["action_mask"]).unsqueeze(0))
+            return dist.probs.squeeze(0).tolist()
+
+    def actions(self, world: World) -> dict:
+        orders = scripted_actions(world)
+        for actor in world.actors.values():
+            if actor.species == Species.SCAVENGER:
+                probs = self.probabilities(world, actor.id)
+                choice = max(range(len(probs)), key=lambda index: probs[index])
+                orders[actor.id] = ACTIONS[Species.SCAVENGER][choice]
+        return orders

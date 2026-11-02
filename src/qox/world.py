@@ -395,6 +395,9 @@ class World:
                 if amount > 0:
                     tile.waste -= amount
                     actor.energy = min(100.0, actor.energy + amount * 2.2)
+                    # Digestion recycles a *fraction* of consumed organic matter.
+                    # The residue is not edible until a later ecology tick.
+                    actor.dung_pending += amount * self.config.scavenger_residue_fraction
                     self.emit("eat_waste", actor.id, amount)
         elif kind == Kind.EAT_CARCASS and actor.species in (Species.RAVAGER, Species.SCAVENGER):
             carcasses = sorted((c for c in self.carcasses.values()
@@ -407,7 +410,11 @@ class World:
                 actor.energy = min(100.0, actor.energy + amount * 4)
                 if actor.species == Species.RAVAGER:
                     actor.satiety = min(1.0, actor.satiety + amount / 8.0)
+                else:
+                    actor.dung_pending += amount * self.config.scavenger_residue_fraction
                 self.emit("eat_carcass", actor.id, amount, str(carcass.id))
+                if actor.species == Species.SCAVENGER:
+                    self.emit("scavenger_carrion", actor.id, amount, str(carcass.id))
                 if carcass.meat <= 1e-8:
                     if carcass.carrier_id is not None:
                         self.actors[carcass.carrier_id].dragged_carcass_id = None
@@ -448,16 +455,26 @@ class World:
             tile.waste -= decayed
             tile.fertility = min(1.0, tile.fertility + decayed * 0.015)
         for actor in self.actors.values():
-            if actor.species == Species.COW and actor.dung_pending >= 0.25:
+            # Scavenger residue is real digested material, NOT fresh food.
+            if (actor.species == Species.COW and actor.dung_pending >= 0.25
+                    or actor.species == Species.SCAVENGER and actor.dung_pending >= 0.02):
                 tile = self.grid.get(actor.x, actor.y)
-                amount = min(actor.dung_pending, cfg.max_waste - tile.waste)
+                amount = min(actor.dung_pending, max(0.0, cfg.max_waste - tile.waste))
                 tile.waste += amount
                 actor.dung_pending -= amount
                 if amount:
-                    self.emit("dung", actor.id, amount)
+                    self.emit("dung" if actor.species == Species.COW
+                              else "scavenger_residue", actor.id, amount)
         for carcass in list(self.carcasses.values()):
             decay = min(carcass.meat, 0.04)
             carcass.meat -= decay
+            # Decayed carrion returns nutrients locally; it is not new biomass.
+            # Any fertility above capacity is lost, never duplicated as waste.
+            tile = self.grid.get(carcass.x, carcass.y)
+            tile.fertility = min(1.0, tile.fertility + decay * cfg.carcass_fertility_return)
+            if decay:
+                self.emit("carcass_decay", amount=decay,
+                          detail=f"carcass:{carcass.id}")
             if carcass.meat <= 1e-8:
                 if carcass.carrier_id is not None and carcass.carrier_id in self.actors:
                     self.actors[carcass.carrier_id].dragged_carcass_id = None
@@ -613,4 +630,14 @@ class World:
             "active_calls": len(self.calls),
             "hibernating_ravagers": sum(a.hibernating for a in self.actors.values()),
             "dragged_carcasses": sum(c.carrier_id is not None for c in self.carcasses.values()),
+            "scavenger_waste_eaten": round(sum(e.amount for e in self.events
+                                                 if e.kind == "eat_waste"), 3),
+            "scavenger_carrion_eaten": round(sum(e.amount for e in self.events
+                                                   if e.kind == "scavenger_carrion"), 3),
+            "manure_collected": round(sum(e.amount for e in self.events
+                                           if e.kind == "collect_waste"), 3),
+            "scavenger_residue": round(sum(e.amount for e in self.events
+                                            if e.kind == "scavenger_residue"), 3),
+            "carcass_mass_decayed": round(sum(e.amount for e in self.events
+                                               if e.kind == "carcass_decay"), 3),
         }
