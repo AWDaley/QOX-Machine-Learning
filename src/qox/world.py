@@ -76,7 +76,9 @@ class World:
 
     def emit(self, kind: str, actor_id: int | None = None, amount: float = 0.0,
              detail: str = "") -> None:
-        event = Event(self.tick, kind, actor_id, round(amount, 6), detail)
+        actor = self.actors.get(actor_id) if actor_id is not None else None
+        event = Event(self.tick, kind, actor_id, round(amount, 6), detail,
+                      actor.x if actor else None, actor.y if actor else None)
         self.events.append(event)
         self.last_events.append(event)
 
@@ -206,6 +208,19 @@ class World:
                 self.emit("eat_carcass", actor.id, amount, str(carcass.id))
                 if carcass.meat <= 1e-8:
                     del self.carcasses[carcass.id]
+        elif kind == Kind.ATTACK and actor.species == Species.RAVAGER:
+            if actor.stamina >= 4.0:
+                victims = sorted((a for a in self.actors.values()
+                                  if a.id != actor.id and a.species != Species.RAVAGER
+                                  and abs(a.x - actor.x) + abs(a.y - actor.y) <= 1),
+                                 key=lambda a: (a.health, a.id))
+                if victims:
+                    target = victims[0]
+                    damage = 12.0
+                    target.health = max(0.0, target.health - damage)
+                    actor.stamina = max(0.0, actor.stamina - 4.0)
+                    actor.energy = max(0.0, actor.energy - 0.5)
+                    self.emit("attack", actor.id, damage, f"target:{target.id}")
         elif kind == Kind.DEPOSIT and actor.species == Species.FARMER:
             store = self._nearby_settlement(actor)
             if store is not None:
@@ -242,7 +257,7 @@ class World:
                 del self.carcasses[carcass.id]
 
     def _metabolism(self) -> None:
-        costs = {Species.FARMER: 0.035, Species.COW: 0.045, Species.NOMAD: 0.05,
+        costs = {Species.FARMER: 0.035, Species.COW: self.config.cow_metabolism, Species.NOMAD: 0.05,
                  Species.SCAVENGER: 0.035, Species.RAVAGER: 0.07}
         for aid, actor in list(sorted(self.actors.items())):
             actor.age += 1

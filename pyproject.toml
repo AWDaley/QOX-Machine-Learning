@@ -5,15 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qox-machine-learning"
 version = "0.1.0"
-description = "Deterministic multi-agent artificial-life simulator (M0–M1)"
+description = "Deterministic multi-agent artificial-life simulator with learned cow policies"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "QOX contributors" }]
-dependencies = []
+dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
 viewer = ["pygame>=2.5,<3"]
-dev = ["pytest>=8", "ruff>=0.8"]
+marl = ["pettingzoo>=1.24,<2", "gymnasium>=1.0,<2"]
+ml = ["torch>=2.2"]
+dev = ["pytest>=8", "ruff>=0.8", "pettingzoo>=1.24,<2", "gymnasium>=1.0,<2"]
 
 [project.scripts]
 qox = "qox.cli:main"

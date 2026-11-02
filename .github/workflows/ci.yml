@@ -17,3 +17,15 @@ jobs:
       - run: python -m ruff check .
       - run: python -m pytest -q
       - run: qox run --ticks 20 --mode scripted --seed 42
+      - run: qox inspect --species cow --seed 42
+  learning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -e '.[dev,ml]'
+      - run: python -m pytest -q tests/test_learning.py
+      - run: qox train-cow --steps 256 --worlds 2 --rollout 64 --output runs/ci-cow.pt
+      - run: qox benchmark-cow --checkpoint runs/ci-cow.pt --episodes 2 --seed 90000

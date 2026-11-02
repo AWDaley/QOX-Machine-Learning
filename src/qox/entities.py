@@ -71,3 +71,5 @@ class Event:
     actor_id: int | None = None
     amount: float = 0.0
     detail: str = ""
+    x: int | None = None
+    y: int | None = None
