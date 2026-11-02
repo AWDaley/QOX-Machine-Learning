@@ -10,7 +10,7 @@ from collections import defaultdict
 from dataclasses import replace
 import random
 
-from ..actions import Action
+from ..actions import Action, Kind
 from ..agents import scripted_actions
 from ..config import SimulationConfig
 from ..entities import Species
@@ -26,10 +26,11 @@ class QoxCoreEnv:
     """
 
     def __init__(self, config: SimulationConfig | None = None, max_steps: int = 128,
-                 scenario: str = "natural", scripted_others: bool = False):
+                 scenario: str = "natural", scripted_others: bool = False,
+                 cow_calls: bool = False, allow_nomad_calls: bool = True):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed"):
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed"):
             raise ValueError(f"Unknown scenario: {scenario}")
         if config is None:
             if scenario == "forage":
@@ -44,14 +45,29 @@ class QoxCoreEnv:
                 config = SimulationConfig(width=12, height=12, farmers=1, cows=1,
                                           nomads=0, scavengers=0, ravagers=0,
                                           crop_growth=0.42, grass_growth=0.32)
+            elif scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+                config = SimulationConfig(width=14, height=12, farmers=0, cows=3,
+                                          nomads=1, scavengers=0,
+                                          ravagers=1 if scenario == "nomad_defend" else 0,
+                                          grass_growth=0.12, cow_metabolism=0.16)
             elif scenario == "refuge":
                 config = SimulationConfig(width=12, height=12, farmers=1, cows=0,
                                           nomads=0, scavengers=0, ravagers=1)
             else:
                 config = SimulationConfig()
+        if scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+            if config.cows != 3 or config.nomads != 1 or config.farmers or config.scavengers:
+                raise ValueError("Nomad curricula require exactly 3 cows, 1 nomad, "
+                                 "no farmers and no scavengers")
+            expected_ravagers = int(scenario == "nomad_defend")
+            if scenario != "nomad_mixed" and config.ravagers != expected_ravagers:
+                raise ValueError("Nomad curriculum predator count mismatch")
         self.config = config
         self.scenario = scenario
         self.scripted_others = scripted_others
+        self.cow_calls = cow_calls
+        self.allow_nomad_calls = allow_nomad_calls
+        self.reached_goal_ids: set[int] = set()
         self.max_steps = max_steps
         self.world: World
         self.possible_agents: list[str] = []
@@ -67,6 +83,8 @@ class QoxCoreEnv:
             raise TypeError("reset options must be a dictionary or None")
         seed = self.config.seed if seed is None else int(seed)
         config = self.config
+        if self.scenario == "nomad_mixed":
+            config = replace(config, ravagers=1 if seed % 2 else 0)
         if self.scenario == "farmer_mixed":
             # Training-only curriculum: instantiate the correct finite
             # population for each task rather than leave extra predators
@@ -77,6 +95,7 @@ class QoxCoreEnv:
         self.world = World(replace(config, seed=seed))
         if self.scenario != "natural":
             self._scenario_setup(seed)
+        self.reached_goal_ids = set()
         self.possible_agents = [get_agent_name(a) for a in self.world.actors.values()]
         self.name_to_id = {get_agent_name(a): aid for aid, a in self.world.actors.items()}
         self.agents = list(self.possible_agents)
@@ -89,7 +108,10 @@ class QoxCoreEnv:
         starting patches are in world state, not hidden knowledge to a policy.
         """
         rng = random.Random(seed ^ 0x45AB90)
-        if self.scenario in ("agriculture", "refuge", "manure", "farmer_mixed"):
+        if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+            self._nomad_scenario(rng, seed)
+            return
+        if self.scenario in ("agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed"):
             self._farmer_scenario(rng, seed)
             return
         for tile in self.world.grid.tiles:
@@ -119,6 +141,63 @@ class QoxCoreEnv:
                           if (x, y) not in occupied and (x, y) not in entrances]
                 if places:
                     predator.x, predator.y = rng.choice(places)
+        self.world.check_invariants()
+
+    def _nomad_scenario(self, rng: random.Random, seed: int) -> None:
+        """Herd migration or cow-defense test with observable local interactions.
+
+        The herd's target pasture is known to the nomad (as a navigation
+        objective), but not automatically to each cow or ravager.
+        """
+        nomad = next(a for a in self.world.actors.values()
+                     if a.species == Species.NOMAD)
+        cows = sorted((a for a in self.world.actors.values()
+                       if a.species == Species.COW), key=lambda a: a.id)
+        threat = self.scenario == "nomad_defend" or (
+            self.scenario == "nomad_mixed" and seed % 2 == 1)
+        # Four migration arrangements: left/right pasture and nomad on
+        # the leading/trailing edge. A fixed "always scary" policy is not
+        # adequate for all four. Local terrain remains seeded and replayable.
+        flip = bool(seed % 2)
+        ahead = bool(seed % 4 >= 2)
+        offset = (seed // 4) % 3 - 1
+        herd_x = 9 if flip and not threat else 4
+        center_y = 5 + offset
+        coords = [(herd_x, center_y - 1), (herd_x, center_y),
+                  (herd_x, center_y + 1)]
+        for cow, (x, y) in zip(cows, coords, strict=True):
+            cow.x, cow.y = x, y
+            cow.energy = 75
+            cow.health = 55.0 if threat else 100.0
+        if threat:
+            nomad.x, nomad.y = (5, 3)
+        else:
+            # The leading nomad must keep moving to pull the herd along.
+            nomad.x = (7 if flip else 6) if ahead else (11 if flip else 2)
+            nomad.y = center_y
+        nomad.stamina, nomad.energy = 100.0, 80.0
+        for tile in self.world.grid.tiles:
+            tile.crop = tile.waste = 0.0
+            tile.planted = False
+            tile.cover = 0.0
+            tile.grass = 0.04
+            tile.fertility = 0.4
+        goal = (1 if flip else 12, center_y)
+        self.world.herd_goal = None if threat else goal
+        range_x = range(0, 4) if flip else range(10, 14)
+        for x in range_x:
+            for y in range(center_y - 2, center_y + 3):
+                tile = self.world.grid.get(x, y)
+                tile.grass = 6.0 + rng.random()
+                tile.fertility = 0.9
+        if threat:
+            predator = next(a for a in self.world.actors.values()
+                            if a.species == Species.RAVAGER)
+            predator.x, predator.y = 7, 5
+            predator.stamina = 100.0
+            # A wounded predator can be beaten by a coordinated defense, but
+            # is individually much more threatening than a nomad.
+            predator.health = 64.0
         self.world.check_invariants()
 
     def _farmer_scenario(self, rng: random.Random, seed: int) -> None:
@@ -170,8 +249,15 @@ class QoxCoreEnv:
         self.world.check_invariants()
 
     def _observations(self) -> dict:
-        return {name: observe(self.world, self.world.actors[self.name_to_id[name]])
-                for name in self.agents}
+        observations = {name: observe(self.world, self.world.actors[self.name_to_id[name]],
+                                      cow_calls=self.cow_calls)
+                        for name in self.agents}
+        if not self.allow_nomad_calls:
+            for name, state in observations.items():
+                if name.startswith("nomad_"):
+                    for kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
+                        state["action_mask"][ACTIONS[Species.NOMAD].index(Action(kind))] = 0
+        return observations
 
     def step(self, actions: dict[str, int]):
         if not self.agents:
@@ -183,6 +269,11 @@ class QoxCoreEnv:
                       for name in previous}
         old_energy = {name: self.world.actors[self.name_to_id[name]].energy
                       for name in previous}
+        old_cows = {aid: (a.position, a.health)
+                    for aid, a in self.world.actors.items() if a.species == Species.COW}
+        goal = self.world.herd_goal
+        old_goal_distances = {aid: abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+                              for aid, (pos, _) in old_cows.items()} if goal else {}
         orders: dict[int, Action] = {}
         invalid: dict[str, bool] = {}
         scripted = scripted_actions(self.world) if self.scripted_others else {}
@@ -190,14 +281,21 @@ class QoxCoreEnv:
             actor = self.world.actors[self.name_to_id[name]]
             if name in actions:
                 choice = int(actions[name])
-                available = observe(self.world, actor)["action_mask"]
+                available = observe(self.world, actor, cow_calls=self.cow_calls)["action_mask"].copy()
+                if actor.species == Species.NOMAD and not self.allow_nomad_calls:
+                    for k in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
+                        available[ACTIONS[Species.NOMAD].index(Action(k))] = 0
                 if not 0 <= choice < len(ACTIONS[actor.species]):
                     raise ValueError(f"Action index outside action space: {name}={choice}")
                 invalid[name] = not bool(available[choice])
                 orders[actor.id] = (Action() if invalid[name] else
                                     ACTIONS[actor.species][choice])
             elif self.scripted_others:
-                orders[actor.id] = scripted[actor.id]
+                chosen = scripted[actor.id]
+                if (not self.allow_nomad_calls and actor.species == Species.NOMAD
+                        and chosen.kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL)):
+                    chosen = Action()
+                orders[actor.id] = chosen
             else:
                 orders[actor.id] = Action()
         self.world.step(orders)
@@ -231,6 +329,54 @@ class QoxCoreEnv:
                 value = 0.0
             rewards[name] += value
             components[name][event.kind] += value
+        if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+            actual_cows = {aid: a for aid, a in self.world.actors.items()
+                           if a.species == Species.COW}
+            gained = set()
+            for name in previous:
+                if not name.startswith("nomad_"):
+                    continue
+                if goal is not None:
+                    # Progress depends exclusively on actual cattle movement,
+                    # not call use. Once-per-cow pasture arrival prevents loops.
+                    progress = sum(old_dist - (abs(actual_cows[aid].x - goal[0])
+                                                + abs(actual_cows[aid].y - goal[1]))
+                                   for aid, old_dist in old_goal_distances.items()
+                                   if aid in actual_cows)
+                    delta = 0.4 * progress / max(1, len(old_cows))
+                    rewards[name] += delta
+                    components[name]["herd_progress"] += delta
+                    newly_reached = {aid for aid, cow in actual_cows.items()
+                                     if aid not in self.reached_goal_ids
+                                     and abs(cow.x - goal[0]) + abs(cow.y - goal[1]) <= 2}
+                    gained.update(newly_reached)
+                    for aid in newly_reached:
+                        rewards[name] += 2.0
+                        components[name]["new_cow_in_pasture"] += 2.0
+                # Penalize harm to cattle, rather than paying a nomad for
+                # arbitrary attack actions or staying near the herd.
+                damage = sum(max(0, health - actual_cows[aid].health)
+                             for aid, (_, health) in old_cows.items() if aid in actual_cows)
+                deaths = sum(aid not in actual_cows for aid in old_cows)
+                value = -0.04 * damage - 2.5 * deaths
+                rewards[name] += value
+                components[name]["herd_harm"] += value
+            # A cow learns only from actual displacement and nourishment,
+            # not from a magic instruction to obey the nomad's call.
+            for name in previous:
+                if not name.startswith("cow_"):
+                    continue
+                aid = self.name_to_id[name]
+                if goal is not None and aid in old_goal_distances and aid in actual_cows:
+                    cow = actual_cows[aid]
+                    change = old_goal_distances[aid] - (
+                        abs(cow.x - goal[0]) + abs(cow.y - goal[1]))
+                    rewards[name] += 0.4 * change
+                    components[name]["pasture_progress"] += 0.4 * change
+                    if aid in gained:
+                        rewards[name] += 2.0
+                        components[name]["first_pasture_arrival"] += 2.0
+            self.reached_goal_ids.update(gained)
         terminations = {}
         truncations = {}
         for name in previous:
@@ -249,6 +395,15 @@ class QoxCoreEnv:
                 # No reward for merely existing or cyclically increasing an
                 # already full energy bar; finite intake is directly rewarded.
             truncations[name] = self.world.tick >= self.max_steps
+            if truncations[name] and name.startswith("nomad_") and self.scenario in (
+                    "nomad_herd", "nomad_defend", "nomad_mixed"):
+                # End-of-episode cow health/retention matters for nomad defense.
+                retained = [a for a in self.world.actors.values()
+                            if a.species == Species.COW]
+                value = 1.5 * (sum(a.health / 100 for a in retained) /
+                               max(1, len(old_cows)))
+                rewards[name] += value
+                components[name]["herd_condition_at_end"] += value
         self.agents = [name for name in previous if not (terminations[name]
                                                          or truncations[name])]
         infos = {name: {"invalid_action": invalid.get(name, False),

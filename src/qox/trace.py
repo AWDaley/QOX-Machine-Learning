@@ -39,18 +39,24 @@ class Trace:
 
 
 def run(config: SimulationConfig, ticks: int, mode: str = "scripted",
-        record: bool = False, checkpoint: str | Path | None = None) -> tuple[World, Trace | None]:
+        record: bool = False, checkpoint: str | Path | None = None,
+        cow_checkpoint: str | Path | None = None) -> tuple[World, Trace | None]:
     if ticks < 0:
         raise ValueError("ticks cannot be negative")
     world = World(config)
     trace = Trace(config.as_dict()) if record else None
     controller = None
-    if mode in ("learned-cow", "learned-farmer"):
+    if mode in ("learned-cow", "learned-farmer", "learned-nomad", "learned-herd"):
         if checkpoint is None:
             raise ValueError("--checkpoint is required for learned actor mode")
-        from .learning.inference import CowController, FarmerController
+        from .learning.inference import (CowController, FarmerController,
+                                         NomadController, HerdController)
+        if mode == "learned-herd" and cow_checkpoint is None:
+            raise ValueError("--cow-checkpoint is required for learned-herd")
         controller = (CowController(checkpoint) if mode == "learned-cow"
-                      else FarmerController(checkpoint))
+                      else FarmerController(checkpoint) if mode == "learned-farmer"
+                      else NomadController(checkpoint) if mode == "learned-nomad"
+                      else HerdController(checkpoint, cow_checkpoint))
     for _ in range(ticks):
         orders = controller.actions(world) if controller else actions_for(world, mode)
         world.step(orders)

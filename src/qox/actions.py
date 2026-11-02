@@ -9,6 +9,9 @@ from enum import StrEnum
 class Kind(StrEnum):
     WAIT = "wait"
     MOVE = "move"
+    DASH = "dash"  # Nomad-only two-cell burst.
+    FRIENDLY_CALL = "friendly_call"
+    SCARY_CALL = "scary_call"
     GRAZE = "graze"
     HARVEST = "harvest"
     PLANT = "plant"
@@ -33,11 +36,11 @@ class Action:
     dy: int = 0
 
     def __post_init__(self) -> None:
-        if self.kind == Kind.MOVE:
+        if self.kind in (Kind.MOVE, Kind.DASH):
             if (self.dx, self.dy) not in DIRECTIONS:
                 raise ValueError("Move must be exactly one cardinal tile")
         elif self.dx != 0 or self.dy != 0:
-            raise ValueError("Only MOVE can have direction")
+            raise ValueError("Only MOVE/DASH can have direction")
 
     def to_dict(self) -> dict:
         return asdict(self)

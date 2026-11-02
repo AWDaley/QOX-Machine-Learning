@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qox-machine-learning"
 version = "0.1.0"
-description = "Deterministic multi-agent artificial-life simulator with learned cow policies"
+description = "Deterministic multi-agent artificial-life simulation and reinforcement learning"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "QOX contributors" }]

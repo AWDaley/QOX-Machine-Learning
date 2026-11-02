@@ -18,6 +18,8 @@ jobs:
       - run: python -m pytest -q
       - run: qox run --ticks 20 --mode scripted --seed 42
       - run: qox inspect --species cow --seed 42
+      - run: qox inspect --species nomad --seed 42
+      - run: qox inspect --species cow --cow-calls --seed 42
   learning:
     runs-on: ubuntu-latest
     steps:
@@ -31,3 +33,9 @@ jobs:
       - run: qox benchmark-cow --checkpoint runs/ci-cow.pt --episodes 2 --seed 90000
       - run: qox train-farmer --steps 256 --worlds 2 --rollout 64 --scenario farmer_mixed --output runs/ci-farmer.pt
       - run: qox benchmark-farmer --checkpoint runs/ci-farmer.pt --scenario refuge --episodes 2 --seed 90000
+      - run: qox train-nomad --steps 128 --worlds 2 --rollout 64 --max-steps 24 --scenario nomad_herd --output runs/ci-nomad.pt
+      - run: qox benchmark-nomad --checkpoint runs/ci-nomad.pt --scenario nomad_herd --episodes 2 --max-steps 24 --seed 90000
+      - run: qox train-cow --steps 128 --worlds 2 --rollout 64 --max-steps 24 --scenario nomad_herd --cow-calls --output runs/ci-cow-v2.pt
+      - run: qox benchmark-cow --checkpoint runs/ci-cow-v2.pt --scenario nomad_herd --episodes 2 --max-steps 24 --seed 90000
+      - run: qox run --ticks 10 --mode learned-herd --checkpoint runs/ci-nomad.pt --cow-checkpoint runs/ci-cow-v2.pt --trace runs/ci-herd-trace.json
+      - run: qox replay --trace runs/ci-herd-trace.json

@@ -13,7 +13,8 @@ def random_actions(world: World) -> dict[int, Action]:
         Species.FARMER: (Kind.PLANT, Kind.HARVEST, Kind.COLLECT_WASTE,
                          Kind.FERTILIZE, Kind.DEPOSIT, Kind.EAT, Kind.ENTER_REFUGE),
         Species.COW: (Kind.GRAZE,),
-        Species.NOMAD: (Kind.MILK, Kind.EAT),
+        Species.NOMAD: (Kind.MILK, Kind.EAT, Kind.ATTACK,
+                         Kind.FRIENDLY_CALL, Kind.SCARY_CALL),
         Species.SCAVENGER: (Kind.EAT, Kind.EAT_CARCASS),
         Species.RAVAGER: (Kind.EAT_CARCASS,),
     }
@@ -42,6 +43,29 @@ def _toward(world: World, actor: Actor, target: tuple[int, int]) -> Action:
     return Action(Kind.MOVE, *world.policy_rng.choice(options))
 
 
+def _away(world: World, actor: Actor, point: tuple[float, float]) -> Action:
+    """Simple transparent cow-response baseline, not a neural decision."""
+    occupied = {a.position for a in world.actors.values() if a.id != actor.id
+                and not a.sheltered}
+    options = []
+    for dx, dy in DIRECTIONS:
+        x, y = actor.x + dx, actor.y + dy
+        if (not world.grid.contains(x, y) or not world.grid.get(x, y).passable
+                or (x, y) in occupied or
+                any(s.x == x and s.y == y for s in world.settlements)):
+            continue
+        before_x, before_y = actor.x - point[0], actor.y - point[1]
+        # Prefer movement away on the axis with the largest displacement.
+        alignment = dx * before_x + dy * before_y
+        distance = abs(x - point[0]) + abs(y - point[1])
+        options.append((distance, alignment, dx, dy))
+    if not options:
+        return Action(Kind.REST)
+    best = max((distance, alignment) for distance, alignment, _, _ in options)
+    return Action(Kind.MOVE, *world.policy_rng.choice(sorted(
+        (dx, dy) for d, a, dx, dy in options if (d, a) == best)))
+
+
 def _nearest(world: World, actor: Actor, predicate, radius: int = 5):
     """Script uses local tiles only; the actual learned-observation API comes in M2."""
     choices = []
@@ -62,7 +86,19 @@ def scripted_actions(world: World) -> dict[int, Action]:
         actor = world.actors[aid]
         tile = world.grid.get(actor.x, actor.y)
         if actor.species == Species.COW:
-            if tile.grass > 0.6 or tile.crop > 0.6:
+            # M5 scripted *comparison* policy: perceives local calls, then
+            # chooses to react. Calls NEVER move cattle through the world rules.
+            from .perception import call_features
+            fx, fy, fstrength, sx, sy, sstrength = call_features(world, actor)
+            if sstrength > 0.08:
+                signal = (actor.x + sx * world.config.call_radius,
+                          actor.y + sy * world.config.call_radius)
+                action = _away(world, actor, signal)
+            elif fstrength > 0.08:
+                signal = (actor.x + fx * world.config.call_radius,
+                          actor.y + fy * world.config.call_radius)
+                action = _toward(world, actor, (round(signal[0]), round(signal[1])))
+            elif tile.grass > 0.6 or tile.crop > 0.6:
                 action = Action(Kind.GRAZE)
             else:
                 target = _nearest(world, actor, lambda t: t.grass > 1 or t.crop > 1)
@@ -103,15 +139,50 @@ def scripted_actions(world: World) -> dict[int, Action]:
                 target = _nearest(world, actor, lambda t: t.crop >= 1.5 or t.waste >= 0.6)
                 action = _toward(world, actor, target) if target else Action(Kind.REST)
         elif actor.species == Species.NOMAD:
-            near_milk = any(c.species == Species.COW and c.milk > 0.4 and
-                            abs(c.x - actor.x) + abs(c.y - actor.y) <= 1
-                            for c in world.actors.values())
-            if actor.energy < 60 and actor.carried_food >= 0.7:
+            visible_cows = sorted((c for c in world.actors.values()
+                                   if c.species == Species.COW
+                                   and abs(c.x - actor.x) + abs(c.y - actor.y) <= 5),
+                                  key=lambda c: c.id)
+            nearby_ravagers = sorted((r for r in world.actors.values()
+                                      if r.species == Species.RAVAGER
+                                      and abs(r.x - actor.x) + abs(r.y - actor.y) <= 5),
+                                     key=lambda r: (abs(r.x - actor.x) + abs(r.y - actor.y), r.id))
+            if nearby_ravagers and any(abs(c.x - nearby_ravagers[0].x)
+                                       + abs(c.y - nearby_ravagers[0].y) <= 3
+                                       for c in visible_cows):
+                target = nearby_ravagers[0]
+                distance = abs(target.x - actor.x) + abs(target.y - actor.y)
+                if distance <= 1 and actor.stamina >= world.config.nomad_attack_stamina:
+                    action = Action(Kind.ATTACK)
+                else:
+                    action = _toward(world, actor, target.position)
+            elif world.herd_goal is not None and visible_cows:
+                # Greedy hand-built reference: push cattle away from a nomad
+                # behind the herd, or lure them from ahead; it sees only local cows.
+                mean_x = sum(c.x for c in visible_cows) / len(visible_cows)
+                mean_y = sum(c.y for c in visible_cows) / len(visible_cows)
+                gx, gy = world.herd_goal
+                toward_x = 1 if gx > mean_x else -1 if gx < mean_x else 0
+                toward_y = 1 if gy > mean_y else -1 if gy < mean_y else 0
+                relative = (actor.x - mean_x) * toward_x + (actor.y - mean_y) * toward_y
+                if relative < -0.6 and actor.scary_cooldown == 0:
+                    action = Action(Kind.SCARY_CALL)
+                elif relative > 0.6 and actor.friendly_cooldown == 0:
+                    action = Action(Kind.FRIENDLY_CALL)
+                else:
+                    behind = (round(mean_x - 2 * toward_x),
+                              round(mean_y - 2 * toward_y))
+                    action = _toward(world, actor, behind)
+            elif actor.energy < 60 and actor.carried_food >= 0.7:
                 action = Action(Kind.EAT)
-            elif near_milk:
+            elif any(c.species == Species.COW and c.milk > 0.4 and
+                     abs(c.x - actor.x) + abs(c.y - actor.y) <= 1
+                     for c in world.actors.values()):
                 action = Action(Kind.MILK)
             else:
-                cows = sorted((c for c in world.actors.values() if c.species == Species.COW),
+                cows = sorted((c for c in world.actors.values()
+                               if c.species == Species.COW
+                               and abs(c.x - actor.x) + abs(c.y - actor.y) <= 5),
                               key=lambda c: (abs(c.x - actor.x) + abs(c.y - actor.y), c.id))
                 action = _toward(world, actor, cows[0].position) if cows else Action(Kind.REST)
         elif actor.species == Species.SCAVENGER:

@@ -26,10 +26,24 @@ class SimulationConfig:
     waste_decay: float = 0.12
     cow_metabolism: float = 0.045
     refuge_ration: float = 0.02
+    call_radius: int = 6
+    call_duration: int = 3
+    call_cooldown: int = 5
+    friendly_call_stamina: float = 2.5
+    scary_call_stamina: float = 4.5
+    nomad_dash_stamina: float = 3.0
+    nomad_attack_stamina: float = 5.0
+    nomad_attack_damage: float = 8.0
 
     def __post_init__(self) -> None:
         if self.width < 8 or self.height < 8:
             raise ValueError("World dimensions must each be >= 8")
+        if min(self.call_radius, self.call_duration, self.call_cooldown) < 1:
+            raise ValueError("Sound radii/durations/cooldowns must be positive")
+        if min(self.friendly_call_stamina, self.scary_call_stamina,
+               self.nomad_dash_stamina, self.nomad_attack_stamina,
+               self.nomad_attack_damage) <= 0:
+            raise ValueError("Nomad costs and damage must be positive")
         if self.ecology_interval < 1:
             raise ValueError("ecology_interval must be positive")
         for name in ("farmers", "cows", "nomads", "scavengers", "ravagers"):

@@ -10,7 +10,7 @@ import random
 
 from .actions import Action, Kind
 from .config import SimulationConfig
-from .entities import Actor, Carcass, Event, Settlement, Species, Tile
+from .entities import Actor, CallSignal, Carcass, Event, Settlement, Species, Tile
 from .grid import Grid
 
 
@@ -37,6 +37,8 @@ class World:
         self.settlements = [Settlement(1, w // 4, h // 2), Settlement(2, 3 * w // 4, h // 2)]
         self.actors: dict[int, Actor] = {}
         self.carcasses: dict[int, Carcass] = {}
+        self.calls: list[CallSignal] = []
+        self.herd_goal: tuple[int, int] | None = None
         self._populate()
         self.check_invariants()
 
@@ -90,9 +92,22 @@ class World:
         for aid in sorted(self.actors):
             actor = self.actors[aid]
             action = orders.get(aid, Action())
-            if action.kind != Kind.MOVE or actor.stamina < 0.5:
+            if action.kind not in (Kind.MOVE, Kind.DASH):
                 continue
-            dest = (actor.x + action.dx, actor.y + action.dy)
+            is_dash = action.kind == Kind.DASH
+            cost = self.config.nomad_dash_stamina if is_dash else 0.5
+            if (actor.stamina < cost or
+                    (is_dash and actor.species != Species.NOMAD)):
+                continue
+            distance = 2 if is_dash else 1
+            dest = (actor.x + distance * action.dx, actor.y + distance * action.dy)
+            midpoint = (actor.x + action.dx, actor.y + action.dy)
+            if is_dash and (not self.grid.contains(*midpoint)
+                            or not self.grid.get(*midpoint).passable
+                            or midpoint in occupied
+                            or any(s.x == midpoint[0] and s.y == midpoint[1]
+                                   for s in self.settlements)):
+                continue
             if (not self.grid.contains(*dest) or not self.grid.get(*dest).passable
                     or any((s.x, s.y) == dest for s in self.settlements)):
                 continue
@@ -117,9 +132,11 @@ class World:
             actor.sheltered = False
             if was_sheltered:
                 self.emit("exit_refuge", aid, detail=str(actor.home_id))
-            actor.stamina = max(0.0, actor.stamina - 0.5)
-            actor.energy = max(0.0, actor.energy - 0.07)
-            self.emit("move", aid, detail=f"{x},{y}")
+            is_dash = orders[aid].kind == Kind.DASH
+            actor.stamina = max(0.0, actor.stamina - (
+                self.config.nomad_dash_stamina if is_dash else 0.5))
+            actor.energy = max(0.0, actor.energy - (0.35 if is_dash else 0.07))
+            self.emit("dash" if is_dash else "move", aid, detail=f"{x},{y}")
 
     def home(self, actor: Actor) -> Settlement | None:
         return next((s for s in self.settlements if s.id == actor.home_id), None)
@@ -158,7 +175,7 @@ class World:
     def _interact(self, actor: Actor, action: Action) -> None:
         tile = self.grid.get(actor.x, actor.y)
         kind = action.kind
-        if kind in (Kind.WAIT, Kind.MOVE, Kind.ENTER_REFUGE):
+        if kind in (Kind.WAIT, Kind.MOVE, Kind.DASH, Kind.ENTER_REFUGE):
             return
         # Interior shelter excludes all field work and physical attacks.
         if actor.sheltered and kind not in (Kind.REST, Kind.EAT, Kind.DEPOSIT):
@@ -207,6 +224,34 @@ class World:
                 actor.carried_waste -= useful
                 tile.fertility = min(1.0, tile.fertility + useful * 0.18)
                 self.emit("fertilize", actor.id, useful)
+        elif kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL) and actor.species == Species.NOMAD:
+            friendly = kind == Kind.FRIENDLY_CALL
+            cooldown = actor.friendly_cooldown if friendly else actor.scary_cooldown
+            cost = (self.config.friendly_call_stamina if friendly
+                    else self.config.scary_call_stamina)
+            if cooldown == 0 and actor.stamina >= cost:
+                self.calls.append(CallSignal(actor.id, kind.value, actor.x, actor.y,
+                                             self.tick, self.config.call_radius))
+                if friendly:
+                    actor.friendly_cooldown = self.config.call_cooldown
+                else:
+                    actor.scary_cooldown = self.config.call_cooldown
+                actor.stamina -= cost
+                actor.energy = max(0.0, actor.energy - (0.25 if friendly else 0.4))
+                self.emit(kind.value, actor.id, detail=f"radius:{self.config.call_radius}")
+        elif kind == Kind.ATTACK and actor.species == Species.NOMAD:
+            if actor.stamina >= self.config.nomad_attack_stamina:
+                targets = sorted((other for other in self.actors.values()
+                                  if other.species == Species.RAVAGER
+                                  and abs(other.x - actor.x) + abs(other.y - actor.y) <= 1),
+                                 key=lambda enemy: (enemy.health, enemy.id))
+                if targets:
+                    target = targets[0]
+                    target.health = max(0.0, target.health - self.config.nomad_attack_damage)
+                    actor.stamina -= self.config.nomad_attack_stamina
+                    actor.energy = max(0.0, actor.energy - 0.4)
+                    self.emit("nomad_attack", actor.id, self.config.nomad_attack_damage,
+                              f"target:{target.id}")
         elif kind == Kind.MILK and actor.species == Species.NOMAD:
             cows = sorted((other for other in self.actors.values()
                            if other.species == Species.COW
@@ -316,6 +361,8 @@ class World:
         costs = {Species.FARMER: 0.035, Species.COW: self.config.cow_metabolism, Species.NOMAD: 0.05,
                  Species.SCAVENGER: 0.035, Species.RAVAGER: 0.07}
         for aid, actor in list(sorted(self.actors.items())):
+            actor.friendly_cooldown = max(0, actor.friendly_cooldown - 1)
+            actor.scary_cooldown = max(0, actor.scary_cooldown - 1)
             actor.age += 1
             actor.energy = max(0.0, actor.energy - costs[actor.species])
             actor.stamina = min(100.0, actor.stamina + 0.3)
@@ -338,6 +385,9 @@ class World:
             raise ValueError(f"Actions for nonexistent actors: {sorted(unknown)}")
         self.tick += 1
         self.last_events = []
+        # Existing signals were visible to policies at the preceding tick.
+        self.calls = [signal for signal in self.calls
+                      if self.tick - signal.tick <= self.config.call_duration]
         self._movement(orders)
         self._enter_refuges(orders)
         # Stable ID order matters for deterministic shared-resource resolution.
@@ -367,6 +417,7 @@ class World:
             assert 0 <= a.stamina <= 100 and 0 <= a.milk <= 10.000001
             assert a.carried_food >= -1e-8 and a.carried_waste >= -1e-8
             assert a.dung_pending >= -1e-8
+            assert a.friendly_cooldown >= 0 and a.scary_cooldown >= 0
         for tile in self.grid.tiles:
             assert 0 <= tile.fertility <= 1 and 0 <= tile.grass <= cfg.max_grass
             assert 0 <= tile.crop <= cfg.max_crop and 0 <= tile.waste <= cfg.max_waste + 1e-8
@@ -374,6 +425,8 @@ class World:
         for carcass in self.carcasses.values():
             assert carcass.meat > 0 and self.grid.contains(carcass.x, carcass.y)
         assert all(s.stored_food >= 0 for s in self.settlements)
+        assert all(sig.kind in (Kind.FRIENDLY_CALL.value, Kind.SCARY_CALL.value)
+                   and sig.radius >= 1 and sig.tick <= self.tick for sig in self.calls)
 
     def snapshot(self) -> dict:
         return {
@@ -383,6 +436,8 @@ class World:
             "actors": [asdict(self.actors[aid]) for aid in sorted(self.actors)],
             "settlements": [asdict(s) for s in self.settlements],
             "carcasses": [asdict(self.carcasses[cid]) for cid in sorted(self.carcasses)],
+            "calls": [asdict(signal) for signal in self.calls],
+            "herd_goal": self.herd_goal,
         }
 
     def state_hash(self) -> str:
@@ -404,4 +459,5 @@ class World:
             "sheltered_farmers": sum(a.sheltered for a in self.actors.values()),
             "carcass_meat": round(sum(c.meat for c in self.carcasses.values()), 3),
             "events": dict(sorted(kinds.items())),
+            "active_calls": len(self.calls),
         }

@@ -1,6 +1,6 @@
 # QOX Machine Learning
 
-**Current status: M0–M4 implemented (deterministic ecosystem, M2 perception, M3 cow PPO, and M4 learned farmer/refuge/agriculture).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
+**Current status: M0–M5 implemented (deterministic ecosystem, local perception, cow/farmer PPO, nomad calls/mobile defense, and early nomad/cow-v2 learning).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
 
 ## Quick start
 
@@ -59,6 +59,25 @@ Farmers can cultivate/harvest, collect and apply cattle manure, transfer crops t
 
 The short farmer curricula contain one trainable farmer and scripted neighbors. On held-out local tests, the learned farmer beat random legal actions at food deposition and survival, but trailed the scripted agriculture baseline. **Do not interpret this as mastery of long-term farming, manure management, or stable ecosystem cooperation.** See [M4 learning results and caveats](docs/M4_FARMER_LEARNING.md).
 
+## Nomad calls and learned-herd experiments (M5)
+
+M5 implements **friendly (pull)** and **scary (push)** calls as separate local sound signals, physically fast nomad dashes, ravager-only defensive melee, optional 66-input call-aware cow checkpoints, 72-input nomad PPO, scripted baselines, and no-call ablations. Nomad calls alter **cow sensory inputs only**, never cattle positions directly.
+
+```powershell
+# Learned nomad, with scripted responsive cows and predators
+qox train-nomad --scenario nomad_herd --steps 16384 --seed 61 --output runs/nomad.pt
+qox benchmark-nomad --checkpoint runs/nomad.pt --scenario nomad_herd --episodes 24
+
+# Train a new call-aware cow v2 model (M3 60-input models still work)
+qox train-cow --scenario nomad_herd --cow-calls --steps 8192 --seed 67 --output runs/cow-v2.pt
+qox benchmark-cow --checkpoint runs/cow-v2.pt --scenario nomad_herd --episodes 16
+
+# Run both learned policies together; remaining species are scripted
+qox viewer --mode learned-herd --checkpoint runs/nomad.pt --cow-checkpoint runs/cow-v2.pt
+```
+
+**Learning is not yet reliable:** the sampled M5 nomad PPO performed similarly to random legal actions in held-out pasture tests and still trails the scripted herder; the cow-v2 model achieved some navigation gains but did **not** show a causal benefit from nomad calls. See [M5 mechanics, benchmarks, and limitations](docs/M5_NOMADS_COMMUNICATION.md). Do not treat a scripted cow responding to audio as a trained behavior.
+
 ## Implemented
 
 - Seeded 2D world with vegetation, fertile soil, crops, cattle waste, milk, carcasses, storage and energy expenditure.
@@ -68,18 +87,20 @@ The short farmer curricula contain one trainable farmer and scripted neighbors. 
 - **M2:** Core simultaneous-action environment plus optional PettingZoo ParallelEnv adapter exposing Gymnasium Dict observations containing `observation` and `action_mask`.
 - **M3:** Compact PyTorch actor-critic, masked PPO, configurable curricula, saved/checkable policies, frozen-policy evaluation against two baselines, and a learned-cow viewer mode.
 - **M4:** Farmer-only action/observation extension, finite-capacity refuge and food ration accounting, cow crop damage and manure/fertilizer, farmer PPO and agriculture/manure/refuge benchmarks, learned-farmer viewer and trace replay.
+- **M5:** Nomad two-tile dash, melee attacks against ravagers, distinct friendly/scary sound calls with finite costs/cooldowns, opt-in 66-input neural cow observations, 72-input nomad policy and PPO curricula, no-call evaluation ablations, combined learned-herd viewer and trace replay.
 - Simple non-stealth ravager contact attack to create a real early survival threat.
 - CLI, ANSI and Pygame visualization, structured events, automated Python CI.
 
 ## Not yet implemented
 
-The other three species (nomads, scavengers, ravagers) **do not have learned policies yet**. M5–M9 will add nomad push/pull calls and defense, ravager stealth/charge/drag/hibernate, advanced scavenger nutrient competition, solo/combined festivals and reproduction. Features described in the design plan are not claims of completed code. QOX currently demonstrates foraging-policy training, not a validated stable ecology.
+Scavengers and ravagers **do not have learned policies yet**. M6–M9 will add ravager stealth/charge/drag/hibernate, advanced scavenger nutrient competition, solo/combined festivals and reproduction. M5's neural cattle **have not demonstrated reliable signal comprehension**, and neural nomads have not mastered herding or defense; the effective scripted counterparts are reference policies, not scientific evidence of emergence. The simulation has not demonstrated long-run stable ecology.
 
 ## Documents
 
 - [Complete implementation plan](docs/IMPLEMENTATION_PLAN.md)
 - [M2–M3 observations, training and baseline results](docs/M2_M3_LEARNING.md)
 - [M4 farmer agriculture/refuge and training benchmarks](docs/M4_FARMER_LEARNING.md)
+- [M5 nomad communication, cow-v2 policies and honest benchmarks](docs/M5_NOMADS_COMMUNICATION.md)
 
 ## Scientific reproducibility
 
