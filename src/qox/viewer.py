@@ -15,6 +15,11 @@ from .population import is_juvenile
 from .sprites import BEHAVIORS, SpriteAtlas, actor_behavior, draw_badge
 from .viewer_layout import Camera, Rect, ViewerLayout, layout_for
 from .viewer_events import DisplayEvent, EventObserver, capture_actors
+from .decision_inspector import capture_decision, with_outcome
+from .telemetry import Telemetry
+from .replay_session import ReplayCursor
+from .viewer_analytics import draw_decision, draw_graphs
+from .trace import Trace
 from .world import World
 
 SPECIES_COLORS = {
@@ -215,19 +220,24 @@ def _event_effects(screen, camera: Camera, viewport: Rect,
             pg.draw.circle(screen, cue.color, (cx - radius // 2, cy - radius), 2)
         if cue.major and tile >= 20 and progress < 0.6:
             label = cue.label if len(cue.label) < 25 else cue.label[:22] + "..."
+            # A compact label makes decisive events easy to catch without
+            # flooding the world with text for every ordinary move or graze.
             _text(screen, small_font, label, cx + 7, cy - radius - 13,
                   cue.color, max(70, min(180, viewport.right - cx - 9)))
     screen.set_clip(old_clip)
 
 
 def _event_panel(screen, camera: Camera, viewport: Rect,
-                 observer: EventObserver, font, *, important_only: bool = True):
+                 observer: EventObserver, font, *, important_only: bool = True,
+                 species_filter: Species | None = None,
+                 actor_filter: int | None = None):
     """Return clickable event-row locations, keeping the world unobstructed."""
     pg = _pygame()
     width = min(440, viewport.width - 24)
     if width < 140:
         return []
-    rows = observer.recent(5, important_only=important_only)
+    rows = observer.recent(5, important_only=important_only,
+                           species=species_filter, actor_id=actor_filter)
     height = 35 + 26 * max(2, len(rows)) + 9
     x, y = viewport.x + 12, viewport.bottom - height - 12
     overlay = pg.Surface((width, height), pg.SRCALPHA)
@@ -235,7 +245,10 @@ def _event_panel(screen, camera: Camera, viewport: Rect,
     screen.blit(overlay, (x, y))
     pg.draw.rect(screen, (64, 82, 99), (x, y, width, height), 1, border_radius=5)
     mode = "major" if important_only else "all"
-    _text(screen, font, f"RECENT EVENTS  [{mode}]  E hide  |  T filter", x + 9, y + 8,
+    subgroup = species_filter.value if species_filter is not None else "all species"
+    if actor_filter is not None:
+        subgroup += f" #{actor_filter}"
+    _text(screen, font, f"EVENTS [{mode}, {subgroup}]  B species · Y actor", x + 9, y + 8,
           (245, 211, 115), width - 16)
     hitboxes = []
     for index, event in enumerate(rows):
@@ -257,17 +270,25 @@ def _focus_event(camera: Camera, viewport: Rect, event: DisplayEvent) -> None:
     """Camera-only action for clicked feed rows; no world coordinates change."""
     if event.x is None or event.y is None:
         return
-    camera.x = event.x * camera.tile + camera.tile // 2 - viewport.width // 2
-    camera.y = event.y * camera.tile + camera.tile // 2 - viewport.height // 2
+    camera.x = (event.x * camera.tile + camera.tile // 2 - viewport.width // 2)
+    camera.y = (event.y * camera.tile + camera.tile // 2 - viewport.height // 2)
     camera.clamp(viewport)
-
 
 def _sidebar(screen, world: World, layout: ViewerLayout, sprites: SpriteAtlas,
              actions: dict[int, Action], selected_id: int | None, font,
              title_font, small_font, mode: str, controller=None,
-             observer: EventObserver | None = None) -> None:
+             observer: EventObserver | None = None, *, tab: str = "actors",
+             telemetry: Telemetry | None = None, decision=None,
+             observation_scroll: int = 0) -> None:
     pg = _pygame()
     side = layout.sidebar
+    if tab == "graphs" and telemetry is not None:
+        draw_graphs(screen, side, telemetry, title_font, font, small_font)
+        return
+    if tab == "neural":
+        draw_decision(screen, side, decision, title_font, font, small_font,
+                      scroll=observation_scroll)
+        return
     _rounded(screen, (side.x, side.y, side.width, side.height), PANEL,
              (48, 62, 77), radius=11)
     x = side.x + 16
@@ -375,14 +396,16 @@ def _sidebar(screen, world: World, layout: ViewerLayout, sprites: SpriteAtlas,
 
 
 def _header_and_footer(screen, layout: ViewerLayout, world: World,
-                       fonts: tuple, fps: int, paused: bool, badges: bool) -> None:
+                       fonts: tuple, fps: int, paused: bool, badges: bool, *,
+                       replay_status: str = "", note: str = "") -> None:
     pg = _pygame()
     title, regular, small = fonts
     w = screen.get_width()
     pg.draw.rect(screen, (15, 24, 35), (0, 0, w, screen.get_height()))
     _text(screen, title, "QOX", 20, 10, ACCENT)
     _text(screen, regular, "ARTIFICIAL LIFE LAB", 90, 20, LIGHT)
-    state = "PAUSED" if paused else "LIVE"
+    state = "REPLAY PAUSED" if replay_status and paused else (
+        "REPLAY" if replay_status else "PAUSED" if paused else "LIVE")
     summary = world.summary()
     count = sum(summary["population"].values())
     status = (f"{state}  |  TICK {world.tick:,}  |  {fps} TPS  |  "
@@ -393,8 +416,15 @@ def _header_and_footer(screen, layout: ViewerLayout, world: World,
              (44, 60, 76), radius=8)
     _text(screen, small, "SPACE pause  ·  N step  ·  +/- speed  ·  Wheel zoom  ·  ",
           foot.x + 14, foot.y + 12, LIGHT)
-    _text(screen, small, "WASD pan · F fit · H icons · E events · T filter · V effects · F11 fullscreen",
-          foot.x + 405, foot.y + 12, MUTED, foot.width - 420)
+    _text(screen, small, "1/2/3 tabs · G graphs · I neural · J/K inputs · E events · X export",
+          foot.x + 400, foot.y + 12, MUTED, foot.width - 410)
+    if replay_status:
+        _text(screen, small, "REPLAY " + replay_status +
+              "  |  ,/. step  PgUp/Dn jump  [/] events  Home/End",
+              foot.x + 14, foot.y + 29, ACCENT, foot.width - 30)
+    elif note:
+        _text(screen, small, note, foot.x + 14, foot.y + 29, ACCENT,
+              foot.width - 30)
     if not badges:
         _text(screen, small, "Badges hidden", foot.right - 130, foot.y + 27, ACCENT)
 
@@ -424,9 +454,17 @@ def _load_controller(mode: str, checkpoint, cow_checkpoint, scenario: str):
 
 
 def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
-            cow_checkpoint=None, scenario: str = "natural", active_controller=None) -> None:
+            cow_checkpoint=None, scenario: str = "natural", active_controller=None,
+            replay_trace: Trace | None = None,
+            record_trace: str | None = None) -> None:
     pg = _pygame()
-    if scenario == "natural":
+    if replay_trace is not None and record_trace is not None:
+        raise ValueError("Cannot record and replay simultaneously")
+    cursor = ReplayCursor(replay_trace) if replay_trace is not None else None
+    if cursor is not None:
+        world = cursor.world
+        config = world.config
+    elif scenario == "natural":
         world = World(config)
     else:
         from .envs.core import QoxCoreEnv
@@ -434,7 +472,9 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
         event_world.reset(seed=config.seed)
         world = event_world.world
         config = world.config
-    controller = active_controller or _load_controller(mode, checkpoint, cow_checkpoint, scenario)
+    controller = (None if cursor is not None else
+                  active_controller or _load_controller(mode, checkpoint, cow_checkpoint, scenario))
+    recording = Trace(config.as_dict()) if record_trace else None
     pg.init()
     info = pg.display.Info()
     desktop_width = info.current_w if info.current_w >= 740 else 1500
@@ -454,18 +494,54 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
     actions: dict[int, Action] = {}
     faces: dict[int, bool] = {}
     selected_id: int | None = None
-    paused = False
+    selected_decision = None
+    panel_tab = "actors"
+    observation_scroll = 0
+    telemetry = Telemetry(sample_every=8)
+    telemetry.observe(world, force=True)
+    feedback_note = ""
+    paused = cursor is not None
     advance_one = False
     badges = True
     event_effects = True
     event_feed = True
     important_events_only = True
+    species_filter_index = 0
+    selected_actor_events = False
     observer = EventObserver()
     event_rows = []
     fps = 12
     running = True
     windowed_size = initial_size
     fullscreen = False
+    def jump_replay(target: int) -> None:
+        nonlocal world, actions, observer, telemetry, selected_decision, advance_one
+        if cursor is None or not 0 <= target <= cursor.length:
+            return
+        if target == cursor.position + 1:
+            before = capture_actors(world)
+            selected_decision = (capture_decision(
+                world, selected_id, policy_label="recorded actions (no weights)")
+                if selected_id else None)
+            world = cursor.seek(target)
+            actions = cursor.last_actions
+            observer.accept(world, actions, before)
+            if selected_decision is not None:
+                result = observer.feedback.get(selected_decision.actor_id)
+                selected_decision = with_outcome(
+                    selected_decision, actions.get(selected_decision.actor_id),
+                    result.result if result else "missing")
+            telemetry.observe(world)
+        else:
+            world = cursor.seek(target)
+            actions = cursor.last_actions
+            observer = EventObserver()
+            telemetry = Telemetry(sample_every=8)
+            telemetry.observe(world, force=True)
+            selected_decision = (capture_decision(
+                world, selected_id, policy_label="recorded actions (no weights)")
+                if selected_id else None)
+        advance_one = False
     while running:
         for event in pg.event.get():
             if event.type == pg.QUIT:
@@ -477,15 +553,30 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                 camera.clamp(layout.map)
                 windowed_size = new_size
             elif event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
+                if cursor is not None and layout.footer.contains(event.pos) and event.pos[1] >= layout.footer.y + 32:
+                    fraction = (event.pos[0] - layout.footer.x) / layout.footer.width
+                    jump_replay(round(max(0, min(1, fraction)) * cursor.length))
+                    paused = True
+                    continue
                 hit = next((cue for box, cue in event_rows if box.collidepoint(event.pos)), None)
                 if hit is not None:
                     _focus_event(camera, layout.map, hit)
                     selected_id = hit.actor_id if hit.actor_id in world.actors else None
+                    selected_decision = (capture_decision(
+                        world, selected_id, controller,
+                        policy_label=("recorded actions (no weights)" if cursor else None))
+                        if selected_id is not None else None)
+                    observation_scroll = 0
                 else:
                     position = camera.tile_at(event.pos, layout.map)
                     if position is not None:
                         selected_id = next((a.id for a in world.actors.values()
                                             if a.position == position and not a.sheltered), None)
+                        selected_decision = (capture_decision(
+                            world, selected_id, controller,
+                            policy_label=("recorded actions (no weights)" if cursor else None))
+                            if selected_id is not None else None)
+                        observation_scroll = 0
             elif event.type == pg.MOUSEWHEEL:
                 camera.zoom(event.y, layout.map, pg.mouse.get_pos())
             elif event.type == pg.KEYDOWN:
@@ -495,6 +586,50 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                     paused = not paused
                 elif event.key == pg.K_n:
                     advance_one = True
+                elif event.key in (pg.K_1, pg.K_2, pg.K_3):
+                    panel_tab = {pg.K_1: "actors", pg.K_2: "neural",
+                                 pg.K_3: "graphs"}[event.key]
+                elif event.key == pg.K_g:
+                    panel_tab = "actors" if panel_tab == "graphs" else "graphs"
+                elif event.key == pg.K_i:
+                    panel_tab = "actors" if panel_tab == "neural" else "neural"
+                elif event.key == pg.K_j:
+                    observation_scroll = max(0, observation_scroll - 5)
+                elif event.key == pg.K_k:
+                    observation_scroll += 5
+                elif event.key == pg.K_x:
+                    try:
+                        from pathlib import Path
+                        folder = Path.home() / "Documents" / "QOX"
+                        stem = f"qox_seed{config.seed}_tick{world.tick}"
+                        telemetry.export_json(folder / (stem + ".json"), policy=mode)
+                        telemetry.export_csv(folder / (stem + ".csv"))
+                        observer.export_json(folder / (stem + "_events.json"))
+                        feedback_note = f"Exported telemetry to {folder}"
+                    except OSError as exc:
+                        feedback_note = f"Export failed: {exc}"
+                elif cursor is not None and event.key in (pg.K_COMMA, pg.K_PERIOD,
+                                                           pg.K_PAGEUP, pg.K_PAGEDOWN,
+                                                           pg.K_HOME, pg.K_END,
+                                                           pg.K_LEFTBRACKET, pg.K_RIGHTBRACKET):
+                    if event.key == pg.K_COMMA:
+                        target = cursor.position - 1
+                    elif event.key == pg.K_PERIOD:
+                        target = cursor.position + 1
+                    elif event.key == pg.K_PAGEUP:
+                        target = cursor.position - 25
+                    elif event.key == pg.K_PAGEDOWN:
+                        target = cursor.position + 25
+                    elif event.key == pg.K_HOME:
+                        target = 0
+                    elif event.key == pg.K_END:
+                        target = cursor.length
+                    else:
+                        target = cursor.next_event_tick(
+                            forward=event.key == pg.K_RIGHTBRACKET)
+                    if target is not None:
+                        jump_replay(max(0, min(cursor.length, target)))
+                    paused = True
                 elif event.key in (pg.K_PLUS, pg.K_EQUALS, pg.K_KP_PLUS):
                     fps = min(120, fps + 5)
                 elif event.key in (pg.K_MINUS, pg.K_KP_MINUS):
@@ -515,6 +650,10 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                     event_feed = not event_feed
                 elif event.key == pg.K_t:
                     important_events_only = not important_events_only
+                elif event.key == pg.K_y:
+                    selected_actor_events = not selected_actor_events
+                elif event.key == pg.K_b and event_feed:
+                    species_filter_index = (species_filter_index + 1) % (len(Species) + 1)
                 elif event.key == pg.K_v:
                     event_effects = not event_effects
                 elif event.key == pg.K_F11:
@@ -526,8 +665,16 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                     fullscreen = not fullscreen
                     layout = layout_for(*screen.get_size())
                     camera.clamp(layout.map)
-        if not paused or advance_one:
+        if cursor is not None:
+            if (not paused or advance_one) and cursor.position < cursor.length:
+                jump_replay(cursor.position + 1)
+            if cursor.position == cursor.length:
+                paused = True
+            advance_one = False
+        elif not paused or advance_one:
             before = capture_actors(world)
+            if selected_id is not None:
+                selected_decision = capture_decision(world, selected_id, controller)
             actions = controller.actions(world) if controller else actions_for(world, mode)
             for aid, action in actions.items():
                 if action.kind in (Kind.MOVE, Kind.DASH, Kind.SNEAK, Kind.CHARGE):
@@ -535,21 +682,49 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                         faces[aid] = action.dx < 0
             world.step(actions)
             observer.accept(world, actions, before)
+            if recording is not None:
+                recording.append(world, actions)
+            telemetry.observe(world)
+            if selected_decision is not None:
+                result = observer.feedback.get(selected_decision.actor_id)
+                selected_decision = with_outcome(
+                    selected_decision, actions.get(selected_decision.actor_id),
+                    result.result if result else "missing")
             advance_one = False
             # Visual metadata about dead actors can be released without changing world state.
             if len(faces) > len(world.actors) * 2 + 10:
                 faces = {aid: facing for aid, facing in faces.items() if aid in world.actors}
         screen.fill((15, 24, 35))
-        _header_and_footer(screen, layout, world, font_set, fps, paused, badges)
+        _header_and_footer(screen, layout, world, font_set, fps, paused, badges,
+                           replay_status=(f"{cursor.position}/{cursor.length}"
+                                          if cursor is not None else ""),
+                           note=feedback_note)
+        if cursor is not None:
+            track = pg.Rect(layout.footer.x + 3, layout.footer.y + 39,
+                            layout.footer.width - 6, 5)
+            pg.draw.rect(screen, (53, 71, 88), track, border_radius=2)
+            if cursor.length:
+                pg.draw.rect(screen, ACCENT, (track.x, track.y,
+                    max(1, int(track.width * cursor.position / cursor.length)), 5),
+                    border_radius=2)
         draw_world(screen, world, camera, layout.map, sprites,
                    observer.confirmed_actions, selected_id, badges=badges, faces=faces)
         if event_effects:
             _event_effects(screen, camera, layout.map, observer, small)
+        species_filter = (None if species_filter_index == 0 else
+                          tuple(Species)[species_filter_index - 1])
         event_rows = (_event_panel(screen, camera, layout.map, observer, small,
-                                   important_only=important_events_only)
+                                   important_only=important_events_only,
+                                   species_filter=species_filter,
+                                   actor_filter=(selected_id if selected_actor_events
+                                                 else None))
                       if event_feed else [])
         _sidebar(screen, world, layout, sprites, observer.confirmed_actions,
-                 selected_id, regular, title, small, mode, controller, observer)
+                 selected_id, regular, title, small, mode, controller, observer,
+                 tab=panel_tab, telemetry=telemetry, decision=selected_decision,
+                 observation_scroll=observation_scroll)
         pg.display.flip()
         clock.tick(fps)
     pg.quit()
+    if recording is not None:
+        recording.save(record_trace)

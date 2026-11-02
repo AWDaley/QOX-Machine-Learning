@@ -1,7 +1,7 @@
 """Read-only, bounded presentation of confirmed QOX world events.
 
-No policy, physics, RNG, or actor state is changed by this module. Actions
-represent requests; only emitted World events prove outcomes. Rendering
+No policy, physics, RNG, or actor state is changed by this module.  Actions
+represent *requests*; only emitted World events prove outcomes.  Rendering
 may run at any rate without changing the authoritative simulation.
 """
 
@@ -44,7 +44,7 @@ class DisplayEvent:
 @dataclass(frozen=True, slots=True)
 class ActionFeedback:
     kind: Kind
-    result: str
+    result: str  # confirmed, unconfirmed, or state (no event expected)
     tick: int
 
 
@@ -65,8 +65,8 @@ PURPLE = (192, 143, 242)
 CREAM = (241, 241, 209)
 ORANGE = (255, 160, 93)
 
-# Only real world events create success effects. Background resource decay
-# and movement ticks do not flood the event feed.
+# Only actual simulator events can create success effects. Nonvisual background
+# work (e.g. every metabolism or carcass decay tick) is deliberately excluded.
 STYLES: dict[str, EventStyle] = {
     "charge_windup": EventStyle("Winding up charge", ORANGE, "ring", 3, True),
     "charge_hit": EventStyle("Charge hit", RED, "impact", 5, True),
@@ -100,7 +100,8 @@ STYLES: dict[str, EventStyle] = {
     "festival_failed": EventStyle("Festival failed", RED, "burst", 9, True),
 }
 
-# The wind-up is the confirmed outcome of CHARGE; the impact is resolved later.
+# One actor may emit multiple events in a tick; each action is confirmed only
+# by its matching event(s). CHARGE means wind-up, not a future impact.
 CONFIRMING_EVENTS: dict[Kind, frozenset[str]] = {
     Kind.MOVE: frozenset({"move"}),
     Kind.DASH: frozenset({"dash"}),
@@ -145,6 +146,7 @@ def classify_event(event: Event, before: Mapping[int, ActorStamp],
     x = event.x if event.x is not None else actor.x if actor is not None else None
     y = event.y if event.y is not None else actor.y if actor is not None else None
     label = style.label
+    effect = style.effect
     color = style.color
     major = style.major
     if event.kind == "charge_resolved":
@@ -159,7 +161,8 @@ def classify_event(event: Event, before: Mapping[int, ActorStamp],
     elif event.kind == "festival_failed":
         label = "Festival failed" + (f" ({event.detail.split(':')[-1]})" if event.detail else "")
     elif event.kind in ("charge_hit", "attack", "nomad_attack"):
-        # Impact belongs at the victim position, not the attacker's position.
+        # Damage events are emitted at the attacker's location, so follow the
+        # victim for impact effects. A death may remove the victim that tick.
         if event.detail.startswith("target:"):
             try:
                 victim_id = int(event.detail.removeprefix("target:"))
@@ -177,8 +180,8 @@ def classify_event(event: Event, before: Mapping[int, ActorStamp],
         a = before[event.actor_id]
         start = (a.x, a.y)
     return DisplayEvent(event.tick, event.kind, label, x, y, event.actor_id,
-                        actor.species if actor is not None else None, event.amount,
-                        color, style.effect, style.lifetime, major, start)
+                        actor.species if actor is not None else None,
+                        event.amount, color, effect, style.lifetime, major, start)
 
 
 class EventObserver:
@@ -199,8 +202,9 @@ class EventObserver:
         """Consume the just-completed tick. Never touch RNG or world objects."""
         self.tick = world.tick
         after = capture_actors(world)
+        emitted = world.last_events
         confirmed_by_actor: dict[int, set[str]] = {}
-        for event in world.last_events:
+        for event in emitted:
             if event.actor_id is not None:
                 confirmed_by_actor.setdefault(event.actor_id, set()).add(event.kind)
             cue = classify_event(event, before, after)
@@ -217,28 +221,51 @@ class EventObserver:
         for actor_id, action in actions.items():
             expected = CONFIRMING_EVENTS.get(action.kind)
             if expected is None:
-                result = "state"
+                result = "state"  # E.g. WAIT or REST has no explicit confirmation.
                 self.confirmed_actions[actor_id] = action
             elif expected.intersection(confirmed_by_actor.get(actor_id, ())):
                 result = "confirmed"
                 self.confirmed_actions[actor_id] = action
             else:
                 result = "unconfirmed"
+                # Do not draw an action-specific success pose for an action
+                # that did not actually happen. Persistent states still draw.
                 self.confirmed_actions[actor_id] = Action()
             self.feedback[actor_id] = ActionFeedback(action.kind, result, self.tick)
 
-    def recent(self, count: int = 6, *, important_only: bool = True) -> list[DisplayEvent]:
+    def recent(self, count: int = 6, *, important_only: bool = True,
+               species: Species | None = None,
+               actor_id: int | None = None) -> list[DisplayEvent]:
+        """Read a filtered view without mutating the underlying event history."""
         if count < 0:
             raise ValueError("Event count cannot be negative")
         if count == 0:
             return []
-        source = self.important_history if important_only else self.history
         result = []
+        source = self.important_history if important_only else self.history
         for item in reversed(source):
+            if species is not None and item.species != species:
+                continue
+            if actor_id is not None and item.actor_id != actor_id:
+                continue
             result.append(item)
             if len(result) >= count:
                 break
         return result
+
+    def export_json(self, path) -> None:
+        """Export the bounded, confirmed visual event stream (not all world.events)."""
+        from dataclasses import asdict
+        import json
+        from pathlib import Path
+
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({
+            "schema_version": 1,
+            "note": "Bounded confirmed events from the viewer observation window",
+            "events": [asdict(event) for event in self.history],
+        }, indent=2), encoding="utf-8")
 
     def active(self) -> tuple[DisplayEvent, ...]:
         return tuple(cue for cue in self.effects

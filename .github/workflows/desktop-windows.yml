@@ -11,9 +11,14 @@ on:
       - 'src/qox/learning/**'
       - 'src/qox/viewer.py'
       - 'src/qox/viewer_events.py'
+      - 'src/qox/viewer_analytics.py'
+      - 'src/qox/decision_inspector.py'
+      - 'src/qox/telemetry.py'
+      - 'src/qox/replay_session.py'
       - 'src/qox/sprites.py'
       - 'src/qox/viewer_layout.py'
       - 'tests/test_m12_*.py'
+      - 'tests/test_m13_*.py'
       - 'qox_desktop.py'
       - 'pyproject.toml'
       - '.github/workflows/desktop-windows.yml'
@@ -31,10 +36,10 @@ jobs:
           cache: 'pip'
       - name: Install simulator and packager
         run: python -m pip install -e '.[viewer,ml]' pyinstaller
-      - name: Exercise event overlays on an offscreen Pygame surface
+      - name: Exercise event overlays using a headless Pygame surface
         run: |
           python -m pip install pytest
-          python -m pytest -q tests/test_m12_pygame.py tests/test_m12_events.py
+          python -m pytest -q tests/test_m12_pygame.py tests/test_m12_events.py tests/test_m13_analytics.py tests/test_m13_pygame.py
       - name: Build portable desktop folder
         run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name QOX --collect-submodules qox --collect-all pygame qox_desktop.py
       - name: Verify the packaged executable can load, save and run five networks
