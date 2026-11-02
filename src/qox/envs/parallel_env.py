@@ -10,7 +10,7 @@ from gymnasium import spaces
 from pettingzoo.utils.env import ParallelEnv
 
 from ..config import SimulationConfig
-from ..perception import ACTIONS, observation_size
+from ..perception import action_catalog, observation_size
 from .core import QoxCoreEnv
 
 
@@ -22,7 +22,7 @@ class QoxParallelEnv(ParallelEnv):
                  max_steps: int = 128, scenario: str = "natural",
                  render_mode: str | None = None,
                  cow_calls: bool = False, allow_nomad_calls: bool = True,
-                 nomad_v2: bool = False):
+                 nomad_v2: bool = False, festival_actions: bool = False):
         if render_mode not in (None, "ansi"):
             raise ValueError("Only ANSI rendering is currently available")
         if scenario in ("farmer_mixed", "nomad_mixed", "ravager_mixed",
@@ -32,20 +32,22 @@ class QoxParallelEnv(ParallelEnv):
         self.render_mode = render_mode
         self.core = QoxCoreEnv(config, max_steps, scenario,
                                cow_calls=cow_calls, allow_nomad_calls=allow_nomad_calls,
-                               nomad_v2=nomad_v2)
+                               nomad_v2=nomad_v2, festival_actions=festival_actions)
         self.cow_calls = cow_calls
         self.nomad_v2 = nomad_v2
+        self.festival_actions = self.core.festival_actions
         self.possible_agents = list(self.core.possible_agents)
         self.agents = list(self.core.agents)
         self.observation_spaces = {}
         self.action_spaces = {}
         for name in self.possible_agents:
             actor = self.core.world.actors[self.core.name_to_id[name]]
-            n = len(ACTIONS[actor.species])
+            n = len(action_catalog(actor.species, festivals=self.festival_actions))
             self.observation_spaces[name] = spaces.Dict({
                 "observation": spaces.Box(low=-1, high=1,
                                            shape=(observation_size(actor.species, cow_calls=self.cow_calls,
-                                                                   nomad_v2=self.nomad_v2),), dtype=np.float32),
+                                                                   nomad_v2=self.nomad_v2,
+                                                                   festivals=self.festival_actions),), dtype=np.float32),
                 "action_mask": spaces.MultiBinary(n),
             })
             self.action_spaces[name] = spaces.Discrete(n)

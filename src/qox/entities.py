@@ -40,6 +40,7 @@ class Actor:
     milk: float = 0.0
     dung_pending: float = 0.0
     home_id: int | None = None
+    band_id: int | None = None
     sheltered: bool = False
     friendly_cooldown: int = 0
     scary_cooldown: int = 0
@@ -68,6 +69,9 @@ class Settlement:
     y: int
     stored_food: float = 8.0
     refuge_capacity: int = 12
+    festival_food: float = 0.0
+    festival_milk: float = 0.0
+    cooldown_until: int = 0
 
 
 @dataclass(slots=True)

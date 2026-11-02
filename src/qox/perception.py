@@ -66,6 +66,16 @@ SCAVENGER_FEATURES = (
     "visible_scavenger_competitors", "visible_ravager_threat",
 )
 RAVAGER_OBSERVATION_VERSION = 2
+# Opt-in M8 contracts: pre-M8 model tensor shapes and action ordering stay stable.
+FESTIVAL_FEATURES = (
+    "festival_site_known", "festival_site_dx", "festival_site_dy",
+    "festival_at_site", "festival_grain_visible", "festival_milk_visible",
+    "festival_survival_stock", "festival_cooldown", "festival_in_progress",
+    "festival_farmers_visible", "festival_nomads_visible", "festival_cows_visible",
+)
+RAVAGER_FESTIVAL_FEATURES = ("festival_noise_dx", "festival_noise_dy",
+                             "festival_noise_strength")
+
 RAVAGER_FEATURES = (
     "satiety", "sneaking", "sneak_ready", "charge_ready", "charge_windup",
     "charge_recovery", "dragging", "drag_ready", "hibernating",
@@ -76,24 +86,26 @@ RAVAGER_FEATURES = (
 
 
 def features_for(species: Species, *, cow_calls: bool = False,
-                 nomad_v2: bool = False) -> tuple[str, ...]:
+                 nomad_v2: bool = False, festivals: bool = False) -> tuple[str, ...]:
     if species == Species.FARMER:
-        return FEATURES + FARMER_FEATURES
+        return FEATURES + FARMER_FEATURES + (FESTIVAL_FEATURES if festivals else ())
     if species == Species.NOMAD:
         return (FEATURES + NOMAD_FEATURES +
-                (NOMAD_RELATIONAL_FEATURES if nomad_v2 else ()))
+                (NOMAD_RELATIONAL_FEATURES if nomad_v2 else ()) +
+                (FESTIVAL_FEATURES if festivals else ()))
     if species == Species.COW and cow_calls:
         return FEATURES + COW_CALL_FEATURES
     if species == Species.RAVAGER:
-        return FEATURES + RAVAGER_FEATURES
+        return FEATURES + RAVAGER_FEATURES + (RAVAGER_FESTIVAL_FEATURES if festivals else ())
     if species == Species.SCAVENGER:
         return FEATURES + SCAVENGER_FEATURES
     return FEATURES
 
 
 def observation_size(species: Species, *, cow_calls: bool = False,
-                     nomad_v2: bool = False) -> int:
-    return len(features_for(species, cow_calls=cow_calls, nomad_v2=nomad_v2))
+                     nomad_v2: bool = False, festivals: bool = False) -> int:
+    return len(features_for(species, cow_calls=cow_calls, nomad_v2=nomad_v2,
+                            festivals=festivals))
 
 
 def _catalog(*kinds: Kind) -> tuple[Action, ...]:
@@ -115,6 +127,56 @@ ACTIONS: dict[Species, tuple[Action, ...]] = {
                       + tuple(Action(Kind.SNEAK, *delta) for delta in DIRECTIONS)
                       + tuple(Action(Kind.CHARGE, *delta) for delta in DIRECTIONS)),
 }
+
+
+def action_catalog(species: Species, *, festivals: bool = False) -> tuple[Action, ...]:
+    base = ACTIONS[species]
+    if festivals and species == Species.FARMER:
+        return base + (Action(Kind.CONTRIBUTE_FESTIVAL),
+                       Action(Kind.START_FARMER_FESTIVAL),
+                       Action(Kind.START_COMBINED_FESTIVAL))
+    if festivals and species == Species.NOMAD:
+        return base + (Action(Kind.CONTRIBUTE_FESTIVAL),
+                       Action(Kind.START_NOMAD_FESTIVAL),
+                       Action(Kind.START_COMBINED_FESTIVAL))
+    return base
+
+
+def festival_features(world: World, actor: Actor) -> tuple[float, ...]:
+    from .festivals import camp_for, distance
+    site = None
+    if actor.species == Species.FARMER:
+        site = world.home(actor)
+    elif actor.species == Species.NOMAD:
+        site = next((s for s in world.settlements
+                     if distance(actor, s.x, s.y) <= VISION_RADIUS), None)
+        if site is None:
+            site = camp_for(world, actor)
+    if site is None:
+        return (0.0,) * len(FESTIVAL_FEATURES)
+    distance_from_site = distance(actor, site.x, site.y)
+    visible = distance_from_site <= VISION_RADIUS
+    active = any(f.x == site.x and f.y == site.y
+                 for f in world.active_festivals.values())
+    return (
+        1.0, max(-1.0, min(1.0, (site.x - actor.x) / VISION_RADIUS)),
+        max(-1.0, min(1.0, (site.y - actor.y) / VISION_RADIUS)),
+        float(distance_from_site <= world.config.festival_site_radius),
+        min(1.0, getattr(site, "festival_food", 0) / 20) if visible else 0,
+        min(1.0, site.festival_milk / 20) if visible else 0,
+        min(1.0, getattr(site, "stored_food", 0) / 25) if visible else 0,
+        min(1.0, max(0, site.cooldown_until - world.tick) / 40) if visible else 0,
+        float(active) if visible else 0,
+        min(1.0, sum(a.species == Species.FARMER and not a.sheltered
+                     and distance(a, site.x, site.y) <= 3
+                     for a in world.actors.values()) / 6) if visible else 0,
+        min(1.0, sum(a.species == Species.NOMAD
+                     and distance(a, site.x, site.y) <= 3
+                     for a in world.actors.values()) / 6) if visible else 0,
+        min(1.0, sum(a.species == Species.COW
+                     and distance(a, site.x, site.y) <= 5
+                     for a in world.actors.values()) / 6) if visible else 0,
+    )
 
 
 def _los(world: World, x0: int, y0: int, x1: int, y1: int) -> bool:
@@ -209,11 +271,11 @@ def call_features(world: World, actor: Actor) -> tuple[float, ...]:
     return tuple(values)
 
 
-def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
+def legal_action_mask(world: World, actor: Actor, *, festivals: bool = False) -> np.ndarray:
     """Mask only physically impossible actions; collision-risky moves stay legal."""
     tile = world.grid.get(*actor.position)
     mask = []
-    for action in ACTIONS[actor.species]:
+    for action in action_catalog(actor.species, festivals=festivals):
         kind = action.kind
         valid = True
         if actor.hibernating:
@@ -306,6 +368,16 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
             valid = False
         elif kind == Kind.DEPOSIT:
             valid = actor.carried_food > 0 and world._nearby_settlement(actor) is not None
+        elif kind == Kind.CONTRIBUTE_FESTIVAL:
+            from .festivals import contribution_target
+            valid = actor.carried_food > 0 and contribution_target(world, actor) is not None
+        elif kind in (Kind.START_FARMER_FESTIVAL, Kind.START_NOMAD_FESTIVAL,
+                      Kind.START_COMBINED_FESTIVAL):
+            from .festivals import FestivalKind, can_start
+            mode = {Kind.START_FARMER_FESTIVAL: FestivalKind.FARMER,
+                    Kind.START_NOMAD_FESTIVAL: FestivalKind.NOMAD,
+                    Kind.START_COMBINED_FESTIVAL: FestivalKind.COMBINED}[kind]
+            valid = can_start(world, actor, mode)
         elif kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
             friendly = kind == Kind.FRIENDLY_CALL
             valid = (actor.species == Species.NOMAD
@@ -329,7 +401,7 @@ def legal_action_mask(world: World, actor: Actor) -> np.ndarray:
 
 
 def observe(world: World, actor: Actor, *, cow_calls: bool = False,
-            nomad_v2: bool = False) -> dict[str, np.ndarray]:
+            nomad_v2: bool = False, festivals: bool = False) -> dict[str, np.ndarray]:
     """Return bounded numeric observations and physical action masks."""
     tile = world.grid.get(*actor.position)
     values = [
@@ -422,12 +494,13 @@ def observe(world: World, actor: Actor, *, cow_calls: bool = False,
     noises = []
     for event in world.last_events:
         if event.kind not in ("move", "attack", "death", "charge_windup",
-                             "charge_resolved"):
+                             "charge_resolved", "festival_noise", "festival_started"):
             continue
         if event.x is not None and event.y is not None and event.actor_id != actor.id:
             distance = abs(event.x - actor.x) + abs(event.y - actor.y)
             if distance <= VISION_RADIUS:
-                noises.append((distance, event.actor_id, event.x, event.y))
+                noises.append((distance, event.actor_id if event.actor_id is not None else -1,
+                                   event.x, event.y))
     if noises:
         dist, _, x, y = min(noises)
         dx, dy, _ = _direction(actor, x, y)
@@ -621,11 +694,17 @@ def observe(world: World, actor: Actor, *, cow_calls: bool = False,
             float(actor.drag_cooldown == 0), float(actor.hibernating),
             *prey_info, min(1, defenders / 4), *cover_info, *scent_info,
         ])
+    if festivals and actor.species in (Species.FARMER, Species.NOMAD):
+        values.extend(festival_features(world, actor))
+    if festivals and actor.species == Species.RAVAGER:
+        from .festivals import festival_cue
+        values.extend(festival_cue(world, actor))
     result = np.asarray(values, dtype=np.float32)
-    expected = observation_size(actor.species, cow_calls=cow_calls, nomad_v2=nomad_v2)
+    expected = observation_size(actor.species, cow_calls=cow_calls, nomad_v2=nomad_v2,
+                                festivals=festivals)
     if result.shape != (expected,):
         raise AssertionError(f"Broken observation schema: {len(result)} != {expected}")
-    return {"observation": result, "action_mask": legal_action_mask(world, actor)}
+    return {"observation": result, "action_mask": legal_action_mask(world, actor, festivals=festivals)}
 
 
 def get_agent_name(actor: Actor) -> str:

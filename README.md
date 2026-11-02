@@ -1,6 +1,28 @@
 # QOX Machine Learning
 
-**Current status: M0–M7 implemented (deterministic ecosystem, species-specific PPO, learned-herd experiments, ravager intelligence, and scavenger nutrient competition).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
+**Current status: M0–M8 implemented (deterministic ecosystem, species-specific PPO, learned-herd experiments, ravager intelligence, scavenger nutrient competition, and three festival types).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
+
+## M8 — Festivals and prosperity
+
+The new M8 implementation adds **farmer-only, nomad-only and combined festivals**:
+explicit grain/milk contributions, separate survival and celebration stores,
+healthy community attendance, multi-tick celebrations, limited cooldowns,
+local predator-attracting sound/scent, and tracked successes/failures.
+Festivals are off in old baseline runs unless enabled by `--festivals` or a
+festival scenario, preserving existing neural-network checkpoint contracts.
+
+```powershell
+qox festival-demo --scenario festival_combined --ticks 20
+qox viewer --festival-scenario festival_combined
+qox run --festivals --ticks 250 --mode scripted
+qox train-festival --scenario festival_farmer --steps 8192 --output runs/festival.pt
+qox benchmark-festival --scenario festival_farmer --checkpoint runs/festival.pt --episodes 24
+qox viewer --festival-scenario festival_farmer --mode learned-festival --checkpoint runs/festival.pt
+```
+
+See [M8 Festival Economy research report](docs/M8_FESTIVAL_ECONOMY.md) for
+mechanical invariants, learning conditions, held-out results, limitations, and
+future ecological experiments.
 
 ## Quick start
 

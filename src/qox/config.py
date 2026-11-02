@@ -47,6 +47,21 @@ class SimulationConfig:
     # M7: digestion leaves only a fraction of scavenged matter as recyclable residue.
     scavenger_residue_fraction: float = 0.12
     carcass_fertility_return: float = 0.015
+    # M8: disabled by default to preserve pre-M8 training and simulation baselines.
+    festival_enabled: bool = False
+    festival_duration: int = 8
+    festival_cooldown: int = 32
+    festival_site_radius: int = 2
+    festival_attendance_radius: int = 3
+    festival_cattle_radius: int = 5
+    festival_signal_radius: int = 12
+    festival_farmer_grain: float = 8.0
+    festival_nomad_milk: float = 4.0
+    festival_combined_grain: float = 8.0
+    festival_combined_milk: float = 4.0
+    festival_farmers_required: int = 2
+    festival_nomads_required: int = 2
+    festival_cows_required: int = 2
 
     def __post_init__(self) -> None:
         if self.width < 8 or self.height < 8:
@@ -69,6 +84,16 @@ class SimulationConfig:
             raise ValueError("Scavenger residue fraction must be between 0 and 1")
         if self.carcass_fertility_return < 0:
             raise ValueError("Carcass nutrient return cannot be negative")
+        if any(getattr(self, key) < 1 for key in (
+            "festival_duration", "festival_cooldown", "festival_site_radius",
+            "festival_attendance_radius", "festival_cattle_radius",
+            "festival_signal_radius", "festival_farmers_required",
+            "festival_nomads_required", "festival_cows_required")):
+            raise ValueError("Festival duration, radii, cooldown and attendance must be positive")
+        if any(getattr(self, key) <= 0 for key in (
+            "festival_farmer_grain", "festival_nomad_milk",
+            "festival_combined_grain", "festival_combined_milk")):
+            raise ValueError("Festival resource requirements must be positive")
         if self.ecology_interval < 1:
             raise ValueError("ecology_interval must be positive")
         for name in ("farmers", "cows", "nomads", "scavengers", "ravagers"):

@@ -42,3 +42,20 @@ ravager_charge_cooldown = 6
 ravager_charge_recovery = 2
 ravager_drag_stamina = 2.5
 ravager_hibernate_metabolism = 0.012
+
+# M8 festivals default off to keep M0–M7 experiment outputs comparable.
+# Set true or use `qox run --festivals` to enable.
+festival_enabled = false
+festival_duration = 8
+festival_cooldown = 32
+festival_site_radius = 2
+festival_attendance_radius = 3
+festival_cattle_radius = 5
+festival_signal_radius = 12
+festival_farmer_grain = 8.0
+festival_nomad_milk = 4.0
+festival_combined_grain = 8.0
+festival_combined_milk = 4.0
+festival_farmers_required = 2
+festival_nomads_required = 2
+festival_cows_required = 2

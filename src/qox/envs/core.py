@@ -16,7 +16,7 @@ from ..actions import Action, Kind
 from ..agents import scripted_actions
 from ..config import SimulationConfig
 from ..entities import Species
-from ..perception import ACTIONS, get_agent_name, observe
+from ..perception import ACTIONS, action_catalog, get_agent_name, observe
 from ..world import World
 
 
@@ -30,13 +30,29 @@ class QoxCoreEnv:
     def __init__(self, config: SimulationConfig | None = None, max_steps: int = 128,
                  scenario: str = "natural", scripted_others: bool = False,
                  cow_calls: bool = False, allow_nomad_calls: bool = True,
-                 nomad_v2: bool = False):
+                 nomad_v2: bool = False, festival_actions: bool = False):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed", "scavenger_waste", "scavenger_carrion", "scavenger_competition", "scavenger_mixed"):
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed", "scavenger_waste", "scavenger_carrion", "scavenger_competition", "scavenger_mixed",
+                            "festival_farmer", "festival_nomad", "festival_combined",
+                            "festival_ravager"):
             raise ValueError(f"Unknown scenario: {scenario}")
         if config is None:
-            if scenario == "forage":
+            if scenario.startswith("festival_"):
+                combo = scenario in ("festival_combined", "festival_ravager")
+                config = SimulationConfig(
+                    width=16, height=14,
+                    farmers=2 if scenario == "festival_farmer" or combo else 0,
+                    nomads=2 if scenario == "festival_nomad" or combo else 0,
+                    cows=2 if scenario == "festival_nomad" or combo else 0,
+                    ravagers=int(scenario == "festival_ravager"), scavengers=0,
+                    festival_enabled=True,
+                    festival_duration=12 if scenario == "festival_ravager" else 5,
+                    festival_farmer_grain=2, festival_nomad_milk=2,
+                    festival_combined_grain=2, festival_combined_milk=2,
+                    festival_farmers_required=1, festival_nomads_required=1,
+                    festival_cows_required=1, ecology_interval=50)
+            elif scenario == "forage":
                 config = SimulationConfig(width=12, height=12, farmers=0, cows=1,
                                           nomads=0, scavengers=0, ravagers=0,
                                           cow_metabolism=0.7)
@@ -88,7 +104,10 @@ class QoxCoreEnv:
             expected_ravagers = int(scenario == "nomad_defend")
             if scenario != "nomad_mixed" and config.ravagers != expected_ravagers:
                 raise ValueError("Nomad curriculum predator count mismatch")
+        if scenario.startswith("festival_") and not config.festival_enabled:
+            raise ValueError("Festival scenarios require festival_enabled=True")
         self.config = config
+        self.festival_actions = festival_actions or scenario.startswith("festival_")
         self.scenario = scenario
         self.scripted_others = scripted_others
         self.cow_calls = cow_calls
@@ -144,6 +163,9 @@ class QoxCoreEnv:
         starting patches are in world state, not hidden knowledge to a policy.
         """
         rng = random.Random(seed ^ 0x45AB90)
+        if self.scenario.startswith("festival_"):
+            self._festival_scenario(rng, seed)
+            return
         if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
             self._nomad_scenario(rng, seed)
             return
@@ -190,6 +212,55 @@ class QoxCoreEnv:
                 if places:
                     predator.x, predator.y = rng.choice(places)
         self.world.check_invariants()
+
+    def _festival_scenario(self, rng: random.Random, seed: int) -> None:
+        """Local community with real, bounded initial stores and a choice to celebrate.
+
+        Starting goods model resources accumulated *before* the episode. The
+        episode still requires a physical contribution and proposal; successful
+        celebrations never conjure food or predators into existence.
+        """
+        from ..entities import Species
+        world = self.world
+        home = world.settlements[0]
+        x, y = home.x, home.y
+        occupied = set()
+        positions = {
+            Species.FARMER: [(x + 1, y), (x, y + 1)],
+            Species.NOMAD: [(x + 2, y), (x, y + 2)],
+            Species.COW: [(x + 3, y), (x + 2, y + 1)],
+            Species.RAVAGER: [(x + 10, y)],
+        }
+        for species in positions:
+            actors = sorted((a for a in world.actors.values() if a.species == species),
+                            key=lambda a: a.id)
+            for actor, destination in zip(actors, positions[species], strict=False):
+                assert world.grid.contains(*destination)
+                assert destination not in occupied
+                occupied.add(destination)
+                actor.x, actor.y = destination
+                actor.energy = 85
+                if species == Species.FARMER:
+                    actor.home_id = home.id
+                    actor.carried_food = 2.5
+                if species == Species.NOMAD:
+                    actor.band_id = 1
+                    actor.carried_food = 2.5
+                if species == Species.COW:
+                    actor.milk = 2.5
+        if world.camps:
+            world.camps[:] = world.camps[:1]
+            world.camps[0].x, world.camps[0].y = x + 1, y + 1
+        # One missing contribution leaves an actual decision: invest in the
+        # celebration or retain carried survival food.
+        home.festival_food = 0.5
+        home.festival_milk = 0.5
+        home.stored_food = 8.0
+        if world.camps:
+            world.camps[0].festival_milk = 0.5
+        # Distinct festival sites exist; keep non-target settlements out of reach.
+        # The physics RNG stays untouched by these deterministic fixtures.
+        del rng, seed
 
     def _scavenger_scenario(self, rng: random.Random, seed: int) -> None:
         """M7 seeded finite-food tasks: waste, carrion, and farmer competition.
@@ -451,7 +522,7 @@ class QoxCoreEnv:
         again, with the same action indices and policy weights, in nomad_herd.
         """
         from ..perception import legal_action_mask
-        mask = legal_action_mask(self.world, actor)
+        mask = legal_action_mask(self.world, actor, festivals=self.festival_actions)
         if actor.species == Species.NOMAD:
             if not self.allow_nomad_calls:
                 for kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL):
@@ -470,7 +541,7 @@ class QoxCoreEnv:
         for name in self.agents:
             actor = self.world.actors[self.name_to_id[name]]
             state = observe(self.world, actor, cow_calls=self.cow_calls,
-                            nomad_v2=self.nomad_v2)
+                            nomad_v2=self.nomad_v2, festivals=self.festival_actions)
             state["action_mask"] = self._legal_mask(actor)
             observations[name] = state
         return observations
@@ -543,11 +614,12 @@ class QoxCoreEnv:
             if name in actions:
                 choice = int(actions[name])
                 available = self._legal_mask(actor)
-                if not 0 <= choice < len(ACTIONS[actor.species]):
+                catalog = action_catalog(actor.species, festivals=self.festival_actions)
+                if not 0 <= choice < len(catalog):
                     raise ValueError(f"Action index outside action space: {name}={choice}")
                 invalid[name] = not bool(available[choice])
                 orders[actor.id] = (Action() if invalid[name] else
-                                    ACTIONS[actor.species][choice])
+                                    catalog[choice])
             elif self.scripted_others:
                 chosen = scripted[actor.id]
                 if (self.scenario.startswith("ravager_")
@@ -561,6 +633,25 @@ class QoxCoreEnv:
                                 abs(other.x - actor.x) + abs(other.y - actor.y) <= 1
                                 for other in self.world.actors.values())
                     chosen = Action(Kind.ATTACK if close else Kind.WAIT)
+                if self.scenario.startswith("festival_"):
+                    # A single controlled learner must initiate its own
+                    # festival. Helpers attend and (for combined events)
+                    # actually contribute milk, but cannot initiate for it.
+                    hero_species = (Species.NOMAD if self.scenario == "festival_nomad"
+                                    else Species.FARMER)
+                    hero = min((a.id for a in self.world.actors.values()
+                                if a.species == hero_species), default=-1)
+                    if actor.id != hero and actor.species in (Species.FARMER, Species.NOMAD):
+                        from ..festivals import contribution_target
+                        site = contribution_target(self.world, actor)
+                        if (self.scenario in ("festival_combined", "festival_ravager")
+                                and actor.species == Species.NOMAD
+                                and site is not None
+                                and site.festival_milk < self.world.config.festival_combined_milk
+                                and actor.carried_food > 0):
+                            chosen = Action(Kind.CONTRIBUTE_FESTIVAL)
+                        else:
+                            chosen = Action(Kind.WAIT)
                 if self.scenario == "cow_signal" and actor.species == Species.NOMAD:
                     kind = (Kind.SCARY_CALL if self.signal_kind == Kind.FRIENDLY_CALL
                             else Kind.FRIENDLY_CALL) if self.flip_signal else self.signal_kind
@@ -638,7 +729,9 @@ class QoxCoreEnv:
             elif event.kind == "charge_hit" and name.startswith("ravager_"):
                 value = 0.012 * event.amount
             elif event.kind == "deposit":
-                value = 0.55 * event.amount
+                # M8 curriculum: a farm's ordinary deposit still conserves
+                # resources, but it does not itself satisfy a festival goal.
+                value = (0.05 if self.scenario.startswith("festival_") else 0.55) * event.amount
             else:
                 value = 0.0
             rewards[name] += value
@@ -693,6 +786,28 @@ class QoxCoreEnv:
                         rewards[name] += 2.0
                         components[name]["first_pasture_arrival"] += 2.0
             self.reached_goal_ids.update(gained)
+        # Celebrate only after a duration with valid attendance. Never reward
+        # the proposed action as though it were a completed festival.
+        if self.scenario.startswith("festival_"):
+            for event in self.world.last_events:
+                if event.kind in ("festival_contribution", "festival_started"):
+                    name = id_to_name.get(event.actor_id)
+                    if name in rewards:
+                        # Starts are real resource-consuming world events,
+                        # unlike merely selecting an invalid start action.
+                        value = (min(event.amount, 2.0) * 0.15
+                                 if event.kind == "festival_contribution" else 0.4)
+                        rewards[name] += value
+                        components[name][event.kind] += value
+            for result in self.world.festival_results:
+                if result.tick != self.world.tick:
+                    continue
+                value = 8.0 if result.succeeded else -1.0
+                for aid in result.participants:
+                    name = id_to_name.get(aid)
+                    if name in rewards:
+                        rewards[name] += value
+                        components[name]["festival_outcome"] += value
         terminations = {}
         truncations = {}
         for name in previous:
