@@ -254,15 +254,15 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                 break
         actor = env.world.actors.get(aid)
         events = [e for e in env.world.events if e.actor_id == aid]
-        def total(kind: str) -> float:
-            return sum(e.amount for e in events if e.kind == kind)
+        totals = {kind: sum(e.amount for e in events if e.kind == kind)
+                  for kind in ("harvest", "deposit", "collect_waste", "fertilize")}
         home = env.world.settlements[0]
         results.append({"seed": seed + episode, "return": round(total_reward, 4),
                         "alive": bool(actor), "final_health": round(actor.health, 3) if actor else 0,
-                        "harvested": round(total("harvest"), 3),
-                        "deposited": round(total("deposit"), 3),
-                        "waste_collected": round(total("collect_waste"), 3),
-                        "fertilized": round(total("fertilize"), 3),
+                        "harvested": round(totals["harvest"], 3),
+                        "deposited": round(totals["deposit"], 3),
+                        "waste_collected": round(totals["collect_waste"], 3),
+                        "fertilized": round(totals["fertilize"], 3),
                         "sheltered_steps": sheltered_steps,
                         "refuge_entries": sum(e.kind == "enter_refuge" for e in events),
                         "final_home_food": round(home.stored_food, 3)})
