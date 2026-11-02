@@ -120,6 +120,7 @@ def test_nomad_melee_targets_ravager_not_cows_and_predator_remains_dangerous():
 
 
 def test_migration_seed_variation_and_calls_are_necessary_for_script_baseline():
+    pytest.importorskip("torch")  # scripted benchmark helper currently imports PyTorch
     from qox.learning.nomad_ppo import evaluate_nomad
     targets = set()
     for seed in range(8):
