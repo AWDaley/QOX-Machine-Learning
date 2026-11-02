@@ -1,6 +1,6 @@
 # QOX Machine Learning
 
-**Current status: M0–M5 implemented (deterministic ecosystem, local perception, cow/farmer PPO, nomad calls/mobile defense, and early nomad/cow-v2 learning).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
+**Current status: M0–M5c implemented (deterministic ecosystem, local perception, cow/farmer PPO, nomad calls/mobile defense, and alternating learned-herd training).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
 
 ## Quick start
 
@@ -139,3 +139,15 @@ qox benchmark-nomad --scenario nomad_signal --checkpoint runs/nomad-signal.pt --
 Existing v1 nomad checkpoints and legacy cow checkpoints still load. Use
 `--nomad-v2` when continuing the new model on the normal `nomad_herd` scenario;
 use `--init-checkpoint` to warm-start from the signal-learning checkpoint.
+
+## M5c: alternating training with frozen learned partners
+
+M5c trains **all three cows** in one shared PPO policy against a frozen learned nomad, then optionally swaps which species learns. The cow network sees no global pasture destination and the calls never physically move cattle. Nomad v1/v2 and cow v2 checkpoint formats remain compatible.
+
+```powershell
+qox train-herd --phase cow --cow-checkpoint checkpoints/cow_signal_65k.pt --nomad-checkpoint checkpoints/nomad_signal_v2_32k.pt --cow-steps 24576 --seed 409 --output-dir runs/m5c
+qox benchmark-herd --cow-checkpoint runs/m5c/cow_round1.pt --nomad-checkpoint checkpoints/nomad_signal_v2_32k.pt --episodes 48 --seed 460000 --report runs/m5c-eval.json
+qox viewer --mode learned-herd --checkpoint checkpoints/nomad_signal_v2_32k.pt --cow-checkpoint runs/m5c/cow_round1.pt
+```
+
+In a separately held-out **48-episode** test, the selected learned cow + unchanged nomad reached **1.96/3** cows to pasture, up from **0.65/3** for the original learned pair; removing the calls reduced arrivals to **1.50/3**, and reversing them to **0.25/3**. Scripted herding remains stronger at **2.77/3**, and the learned-vs-random nomad comparison has wide uncertainty. See the [M5c experiment methodology and limitations](docs/M5C_JOINT_HERD_LEARNING.md). These scores measure short migration scenarios, not demonstrated stable ecology or learned predator defense.

@@ -44,3 +44,5 @@ jobs:
       - run: qox benchmark-cow --checkpoint runs/ci-signal.pt --scenario cow_signal --episodes 2 --max-steps 24 --seed 90100
       - run: qox run --ticks 10 --mode learned-herd --checkpoint runs/ci-nomad.pt --cow-checkpoint runs/ci-cow-v2.pt --trace runs/ci-herd-trace.json
       - run: qox replay --trace runs/ci-herd-trace.json
+      - run: qox train-herd --phase cow --cow-checkpoint runs/ci-cow-v2.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --cow-steps 96 --nomad-steps 96 --worlds 2 --rollout 96 --max-steps 24 --epochs 1 --output-dir runs/ci-joint
+      - run: qox benchmark-herd --cow-checkpoint runs/ci-joint/cow_round1.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --episodes 2 --max-steps 24 --seed 95000 --report runs/ci-joint-eval.json

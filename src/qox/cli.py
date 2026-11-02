@@ -104,6 +104,27 @@ def parser() -> argparse.ArgumentParser:
                                             "random", "scripted", "scripted_nocalls",
                                             "scripted_flipped"), default="policy")
         cmd.add_argument("--report", type=Path)
+    joint = sub.add_parser("train-herd", help="M5c: alternate cow/nomad PPO against frozen partners")
+    joint.add_argument("--cow-checkpoint", type=Path, required=True)
+    joint.add_argument("--nomad-checkpoint", type=Path, required=True)
+    joint.add_argument("--output-dir", type=Path, default=Path("runs/joint-herd"))
+    joint.add_argument("--phase", choices=("alternate", "cow", "nomad"),
+                       default="alternate", help="Train both roles or keep one frozen")
+    joint.add_argument("--cow-steps", type=int, default=12288)
+    joint.add_argument("--nomad-steps", type=int, default=4096)
+    joint.add_argument("--rounds", type=int, default=1)
+    joint.add_argument("--worlds", type=int, default=4)
+    joint.add_argument("--rollout", type=int, default=384)
+    joint.add_argument("--max-steps", type=int, default=96)
+    joint.add_argument("--seed", type=int, default=407)
+    joint.add_argument("--epochs", type=int, default=3)
+    comparison = sub.add_parser("benchmark-herd", help="M5c: paired two-learned-policy call ablations")
+    comparison.add_argument("--cow-checkpoint", type=Path, required=True)
+    comparison.add_argument("--nomad-checkpoint", type=Path, required=True)
+    comparison.add_argument("--episodes", type=int, default=24)
+    comparison.add_argument("--seed", type=int, default=340000)
+    comparison.add_argument("--max-steps", type=int, default=96)
+    comparison.add_argument("--report", type=Path)
     inspect = sub.add_parser("inspect", help="Show one actor's local observation and action mask")
     inspect.add_argument("--seed", type=int, default=42)
     inspect.add_argument("--cow-calls", action="store_true",
@@ -115,6 +136,31 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command in ("train-herd", "benchmark-herd"):
+        try:
+            from .learning.joint_ppo import (JointTrainOptions, benchmark_joint,
+                                             train_joint)
+        except ImportError as exc:
+            raise SystemExit("Herd training requires PyTorch: pip install -e '.[ml]'") from exc
+        if args.command == "train-herd":
+            report = train_joint(JointTrainOptions(
+                cow_steps=args.cow_steps, nomad_steps=args.nomad_steps,
+                seed=args.seed, rounds=args.rounds, worlds=args.worlds,
+                rollout=args.rollout, max_steps=args.max_steps,
+                epochs=args.epochs), args.cow_checkpoint,
+                args.nomad_checkpoint, args.output_dir, phase=args.phase)
+            print(json.dumps({k: v for k, v in report.items() if k != "rounds"},
+                             indent=2))
+            return 0
+        report = benchmark_joint(args.cow_checkpoint, args.nomad_checkpoint,
+                                 episodes=args.episodes, seed=args.seed,
+                                 max_steps=args.max_steps)
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps({k: v for k, v in report.items() if k != "paired_results"},
+                         indent=2))
+        return 0
     if args.command in ("train-nomad", "eval-nomad", "benchmark-nomad"):
         try:
             from .learning.nomad_ppo import (NomadTrainOptions, train_nomad,
