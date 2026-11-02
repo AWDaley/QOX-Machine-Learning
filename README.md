@@ -117,3 +117,25 @@ Scavengers and ravagers **do not have learned policies yet**. M6–M9 will add r
 ## Scientific reproducibility
 
 Training checkpoints record policy weights, hyperparameters, action/observation schemas and training steps. Evaluation uses separate seed ranges, frozen model weights, identical world seeds for the policy and baselines, and raw results in JSON. Action traces can be replayed against hash-checked world state. The learning process is stochastic and results depend on seed, training budget and scenario. All local artifacts under `runs/` are intentionally ignored by Git.
+
+
+## M5b: learned nomad signal selection and herd transfer
+
+The new [M5b curriculum and benchmark](docs/M5B_NOMAD_CURRICULUM.md) trains a
+version-2 nomad policy to choose between friendly and scary calls in a controlled
+one-cow task. Frozen-policy counterfactuals (no calls and reversed calls) verify
+that the signal is causally responsible for movement. In the isolated task, a
+32,768-decision policy reached its waypoint in 96/96 held-out episodes; with
+**three scripted cows** it reached 2.96/3 on 24 held-out migration worlds.
+This **does not yet** transfer reliably to three independently learned cows.
+
+Run the new training task:
+
+```powershell
+qox train-nomad --scenario nomad_signal --steps 32768 --max-steps 8 --output runs/nomad-signal.pt
+qox benchmark-nomad --scenario nomad_signal --checkpoint runs/nomad-signal.pt --episodes 96 --max-steps 8
+```
+
+Existing v1 nomad checkpoints and legacy cow checkpoints still load. Use
+`--nomad-v2` when continuing the new model on the normal `nomad_herd` scenario;
+use `--init-checkpoint` to warm-start from the signal-learning checkpoint.
