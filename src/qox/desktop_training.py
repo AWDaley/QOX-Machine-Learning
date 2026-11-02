@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .desktop_models import train_role
 from .entities import Species
-from .training_lab import (CheckpointHistory, TrainingCancelled, choose_default,
+from .training_lab import (TrainingCancelled, choose_default,
                            compare_checkpoints, scenarios_for)
 
 BG = "#161e29"
@@ -119,7 +119,7 @@ class TrainingLabWindow:
                                           command=self.rollback)
         self.rollback_button.grid(row=13, column=2, sticky="ew")
         self.save_button = ttk.Button(panel, text="Save all five model networks (.qox)",
-                                      command=app._save)
+                                      command=self.app._save)
         self.save_button.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(8, 0),
                               padx=(0, 8))
         self.export_button = ttk.Button(panel, text="Export experiment JSON",
