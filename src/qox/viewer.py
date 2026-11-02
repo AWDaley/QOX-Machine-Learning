@@ -421,9 +421,9 @@ def _header_and_footer(screen, layout: ViewerLayout, world: World,
     if replay_status:
         _text(screen, small, "REPLAY " + replay_status +
               "  |  ,/. step  PgUp/Dn jump  [/] events  Home/End",
-              foot.x + 14, foot.y + 29, GOLD, foot.width - 30)
+              foot.x + 14, foot.y + 29, ACCENT, foot.width - 30)
     elif note:
-        _text(screen, small, note, foot.x + 14, foot.y + 29, GOLD,
+        _text(screen, small, note, foot.x + 14, foot.y + 29, ACCENT,
               foot.width - 30)
     if not badges:
         _text(screen, small, "Badges hidden", foot.right - 130, foot.y + 27, ACCENT)
@@ -520,7 +520,9 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
             return
         if target == cursor.position + 1:
             before = capture_actors(world)
-            selected_decision = capture_decision(world, selected_id) if selected_id else None
+            selected_decision = (capture_decision(
+                world, selected_id, policy_label="recorded actions (no weights)")
+                if selected_id else None)
             world = cursor.seek(target)
             actions = cursor.last_actions
             observer.accept(world, actions, before)
@@ -536,7 +538,9 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
             observer = EventObserver()
             telemetry = Telemetry(sample_every=8)
             telemetry.observe(world, force=True)
-            selected_decision = capture_decision(world, selected_id) if selected_id else None
+            selected_decision = (capture_decision(
+                world, selected_id, policy_label="recorded actions (no weights)")
+                if selected_id else None)
         advance_one = False
     while running:
         for event in pg.event.get():
@@ -558,16 +562,20 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                 if hit is not None:
                     _focus_event(camera, layout.map, hit)
                     selected_id = hit.actor_id if hit.actor_id in world.actors else None
-                    selected_decision = (capture_decision(world, selected_id, controller)
-                                         if selected_id is not None else None)
+                    selected_decision = (capture_decision(
+                        world, selected_id, controller,
+                        policy_label=("recorded actions (no weights)" if cursor else None))
+                        if selected_id is not None else None)
                     observation_scroll = 0
                 else:
                     position = camera.tile_at(event.pos, layout.map)
                     if position is not None:
                         selected_id = next((a.id for a in world.actors.values()
                                             if a.position == position and not a.sheltered), None)
-                        selected_decision = (capture_decision(world, selected_id, controller)
-                                             if selected_id is not None else None)
+                        selected_decision = (capture_decision(
+                            world, selected_id, controller,
+                            policy_label=("recorded actions (no weights)" if cursor else None))
+                            if selected_id is not None else None)
                         observation_scroll = 0
             elif event.type == pg.MOUSEWHEEL:
                 camera.zoom(event.y, layout.map, pg.mouse.get_pos())
@@ -696,7 +704,7 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                             layout.footer.width - 6, 5)
             pg.draw.rect(screen, (53, 71, 88), track, border_radius=2)
             if cursor.length:
-                pg.draw.rect(screen, GOLD, (track.x, track.y,
+                pg.draw.rect(screen, ACCENT, (track.x, track.y,
                     max(1, int(track.width * cursor.position / cursor.length)), 5),
                     border_radius=2)
         draw_world(screen, world, camera, layout.map, sprites,

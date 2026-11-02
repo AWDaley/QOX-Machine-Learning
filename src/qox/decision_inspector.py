@@ -69,7 +69,8 @@ def action_label(action: Action) -> str:
     return action.kind.value
 
 
-def capture_decision(world, actor_id: int, controller=None) -> DecisionSnapshot | None:
+def capture_decision(world, actor_id: int, controller=None, *,
+                     policy_label: str | None = None) -> DecisionSnapshot | None:
     """Snapshot observations and optional neural probabilities before acting."""
     actor = world.actors.get(actor_id)
     if actor is None:
@@ -82,7 +83,7 @@ def capture_decision(world, actor_id: int, controller=None) -> DecisionSnapshot 
     actions = action_catalog(actor.species, festivals=opts["festivals"])
     if len(numbers) != len(names) or len(mask) != len(actions):
         raise ValueError("Observation or action contract mismatch during inspection")
-    policy = "scripted or random"
+    policy = policy_label or "scripted or random"
     probs = None
     if controller is not None:
         try:

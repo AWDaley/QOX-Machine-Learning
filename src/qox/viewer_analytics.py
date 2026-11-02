@@ -143,8 +143,9 @@ def draw_decision(screen, rect, snapshot, title_font, font, small,
     y += 21
     _draw_text(screen, small, f"Outcome: {snapshot.outcome}", x, y,
                (112, 216, 139) if snapshot.outcome == "confirmed" else GOLD, width)
-    y += 30
-    _draw_text(screen, font, "Top 5 legal actions", x, y, GOLD, width)
+    compact = rect.height < 520
+    y += 16 if compact else 30
+    _draw_text(screen, font, "Top legal actions", x, y, GOLD, width)
     y += 25
     if snapshot.policy.startswith("neural"):
         for choice in snapshot.top_actions(3 if compact else 5):
