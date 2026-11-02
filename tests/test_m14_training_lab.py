@@ -1,8 +1,6 @@
 """M14 training laboratory: paired outcomes, cancellation and rollback semantics."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from qox.entities import Species
