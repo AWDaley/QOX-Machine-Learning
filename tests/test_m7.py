@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from qox.actions import Action, Kind
-from qox.agents import scripted_actions
 from qox.config import SimulationConfig
 from qox.entities import Carcass, Species
 from qox.envs.core import QoxCoreEnv
