@@ -18,7 +18,8 @@ COLORS = {
 
 
 def display(config: SimulationConfig, mode: str = "scripted",
-            checkpoint=None, cow_checkpoint=None, scenario: str = "natural") -> None:
+            checkpoint=None, cow_checkpoint=None, scenario: str = "natural",
+            active_controller=None) -> None:
     try:
         import pygame
     except ImportError as exc:
@@ -41,7 +42,7 @@ def display(config: SimulationConfig, mode: str = "scripted",
     clock = pygame.time.Clock()
     if world is None:
         world = World(config)
-    controller = None
+    controller = active_controller
     if mode in ("learned-cow", "learned-farmer", "learned-nomad", "learned-herd",
                 "learned-ravager", "learned-scavenger", "learned-festival"):
         if checkpoint is None:
@@ -187,7 +188,8 @@ def display(config: SimulationConfig, mode: str = "scripted",
             is_controlled = (controller is not None and
                              (selected.species == controlled or
                               (mode == "learned-herd" and selected.species in
-                               (Species.COW, Species.NOMAD))))
+                               (Species.COW, Species.NOMAD)) or
+                              mode == "multi-learned"))
             if is_controlled:
                 from .perception import action_catalog
                 probabilities = controller.probabilities(world, selected.id)

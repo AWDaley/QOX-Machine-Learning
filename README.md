@@ -1,6 +1,6 @@
 # QOX Machine Learning
 
-**Current status: M0–M8 implemented (deterministic ecosystem, species-specific PPO, learned-herd experiments, ravager intelligence, scavenger nutrient competition, and three festival types).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
+**Current status: M0–M9 implemented (deterministic ecosystem, species-specific PPO, learned-herd experiments, ravager intelligence, scavenger nutrient competition, and three festival types).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
 
 ## M8 — Festivals and prosperity
 
@@ -223,4 +223,15 @@ qox population-study --ticks 1200 --seeds 5 --seed 260000 --mode scripted --fest
 ```
 
 The counterfactual keeps adult maturity and aging enabled in **both** conditions. `population-study --mode learned` loads frozen checkpoint(s) for selected species and keeps omitted species scripted; consult [`docs/M9_POPULATION_DYNAMICS.md`](docs/M9_POPULATION_DYNAMICS.md) for exact options and limitations. M9 has **not** demonstrated a permanently stable or independently learned ecosystem.
+
+
+## Windows desktop app (M10)
+
+QOX now has a **launcher with buttons**, built as a portable Windows `QOX.exe` using PyInstaller in GitHub Actions. It supports five **fresh untrained** neural networks, training one species using PPO, importing existing actor checkpoints, saving all five models to a `.qox` file, loading them back, and viewing all five policies in the 2D world.
+
+- [Download a Windows build from GitHub Actions](https://github.com/AWDaley/QOX-Machine-Learning/actions/workflows/desktop-windows.yml) (choose a successful run and its `QOX-Windows-Desktop` artifact)
+- [Windows setup, menu guide, and learning/save limitations](docs/DESKTOP_APP.md)
+- On an installed Python source checkout: `python -m pip install -e ".[viewer,ml]"` then `qox-desktop`
+
+**Important:** Fresh networks start with random weights. The viewer does not automatically train them; use **Train selected species** before saving the trained models. Saves contain neural weights, not the world state. Festival initiation uses a clearly labelled scripted helper until the standard five networks support festival decisions.
 

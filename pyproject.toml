@@ -19,6 +19,7 @@ dev = ["pytest>=8", "ruff>=0.8", "pettingzoo>=1.24,<2", "gymnasium>=1.0,<2"]
 
 [project.scripts]
 qox = "qox.cli:main"
+qox-desktop = "qox.desktop:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
