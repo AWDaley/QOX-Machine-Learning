@@ -14,6 +14,7 @@ from .entities import Species
 from .population import is_juvenile
 from .sprites import BEHAVIORS, SpriteAtlas, actor_behavior, draw_badge
 from .viewer_layout import Camera, Rect, ViewerLayout, layout_for
+from .viewer_events import DisplayEvent, EventObserver, capture_actors
 from .world import World
 
 SPECIES_COLORS = {
@@ -165,9 +166,106 @@ def draw_world(screen, world: World, camera: Camera, viewport: Rect,
     pg.draw.rect(screen, (55, 79, 83), region, 1, border_radius=4)
 
 
+
+def _event_effects(screen, camera: Camera, viewport: Rect,
+                   observer: EventObserver, small_font) -> None:
+    """Paint only world-confirmed, short-lived events. Never mutate physics."""
+    pg = _pygame()
+    old_clip = screen.get_clip()
+    region = pg.Rect(viewport.x, viewport.y, viewport.width, viewport.height)
+    screen.set_clip(region)
+    tile = camera.tile
+    ox, oy = camera.origin(viewport)
+    for cue in observer.active():
+        if cue.x is None or cue.y is None:
+            continue
+        cx = ox + cue.x * tile + tile // 2
+        cy = oy + cue.y * tile + tile // 2
+        if not region.inflate(tile * 3, tile * 3).collidepoint(cx, cy):
+            continue
+        progress = max(0.0, min(1.0, (observer.tick - cue.tick) / cue.lifetime))
+        radius = max(5, int(tile * (0.35 + 0.8 * progress)))
+        if cue.effect == "trail" and cue.start is not None:
+            ax = ox + cue.start[0] * tile + tile // 2
+            ay = oy + cue.start[1] * tile + tile // 2
+            if (ax, ay) != (cx, cy):
+                pg.draw.line(screen, cue.color, (ax, ay), (cx, cy),
+                             max(2, tile // 9))
+                pg.draw.circle(screen, cue.color, (cx, cy), max(3, tile // 6), 1)
+        elif cue.effect == "ring":
+            pg.draw.circle(screen, cue.color, (cx, cy), radius + 3, 2)
+            pg.draw.circle(screen, cue.color, (cx, cy), max(3, radius // 2), 1)
+        elif cue.effect == "impact":
+            pg.draw.line(screen, cue.color, (cx - radius, cy - radius),
+                         (cx + radius, cy + radius), 3)
+            pg.draw.line(screen, cue.color, (cx - radius, cy + radius),
+                         (cx + radius, cy - radius), 3)
+        elif cue.effect == "burst":
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1),
+                           (1, 1), (-1, 1), (1, -1)):
+                pg.draw.line(screen, cue.color,
+                             (cx + dx * radius // 2, cy + dy * radius // 2),
+                             (cx + dx * radius, cy + dy * radius), 2)
+        elif cue.effect == "leaf":
+            pg.draw.ellipse(screen, cue.color,
+                            (cx - radius // 3, cy - radius, max(4, radius // 2),
+                             max(5, radius)))
+        else:
+            pg.draw.circle(screen, cue.color, (cx, cy), max(3, radius // 3), 2)
+            pg.draw.circle(screen, cue.color, (cx - radius // 2, cy - radius), 2)
+        if cue.major and tile >= 20 and progress < 0.6:
+            label = cue.label if len(cue.label) < 25 else cue.label[:22] + "..."
+            _text(screen, small_font, label, cx + 7, cy - radius - 13,
+                  cue.color, max(70, min(180, viewport.right - cx - 9)))
+    screen.set_clip(old_clip)
+
+
+def _event_panel(screen, camera: Camera, viewport: Rect,
+                 observer: EventObserver, font, *, important_only: bool = True):
+    """Return clickable event-row locations, keeping the world unobstructed."""
+    pg = _pygame()
+    width = min(440, viewport.width - 24)
+    if width < 140:
+        return []
+    rows = observer.recent(5, important_only=important_only)
+    height = 35 + 26 * max(2, len(rows)) + 9
+    x, y = viewport.x + 12, viewport.bottom - height - 12
+    overlay = pg.Surface((width, height), pg.SRCALPHA)
+    overlay.fill((11, 22, 35, 230))
+    screen.blit(overlay, (x, y))
+    pg.draw.rect(screen, (64, 82, 99), (x, y, width, height), 1, border_radius=5)
+    mode = "major" if important_only else "all"
+    _text(screen, font, f"RECENT EVENTS  [{mode}]  E hide  |  T filter", x + 9, y + 8,
+          (245, 211, 115), width - 16)
+    hitboxes = []
+    for index, event in enumerate(rows):
+        top = y + 34 + index * 26
+        hitbox = pg.Rect(x + 6, top - 1, width - 12, 25)
+        if index % 2 == 0:
+            pg.draw.rect(screen, (26, 42, 55), hitbox, border_radius=3)
+        aid = f"#{event.actor_id}" if event.actor_id is not None else "World"
+        label = f"{event.tick:>5}  {aid:<7} {event.label}"
+        _text(screen, font, label, x + 12, top + 2, event.color, width - 22)
+        hitboxes.append((hitbox, event))
+    if not rows:
+        _text(screen, font, "No confirmed events yet", x + 12, y + 39,
+              MUTED, width - 20)
+    return hitboxes
+
+
+def _focus_event(camera: Camera, viewport: Rect, event: DisplayEvent) -> None:
+    """Camera-only action for clicked feed rows; no world coordinates change."""
+    if event.x is None or event.y is None:
+        return
+    camera.x = event.x * camera.tile + camera.tile // 2 - viewport.width // 2
+    camera.y = event.y * camera.tile + camera.tile // 2 - viewport.height // 2
+    camera.clamp(viewport)
+
+
 def _sidebar(screen, world: World, layout: ViewerLayout, sprites: SpriteAtlas,
              actions: dict[int, Action], selected_id: int | None, font,
-             title_font, small_font, mode: str, controller=None) -> None:
+             title_font, small_font, mode: str, controller=None,
+             observer: EventObserver | None = None) -> None:
     pg = _pygame()
     side = layout.sidebar
     _rounded(screen, (side.x, side.y, side.width, side.height), PANEL,
@@ -194,9 +292,9 @@ def _sidebar(screen, world: World, layout: ViewerLayout, sprites: SpriteAtlas,
         yy += 34
         _text(screen, small_font, "Click any sprite to inspect it.", x, yy, MUTED)
         yy += 25
-        _text(screen, small_font, "Action badges show its latest", x, yy, MUTED)
+        _text(screen, small_font, "Action badges show confirmed results", x, yy, MUTED)
         yy += 19
-        _text(screen, small_font, "attempted action or current state.", x, yy, MUTED)
+        _text(screen, small_font, "or persistent states.", x, yy, MUTED)
         yy += 38
     else:
         beh = actor_behavior(selected, actions.get(selected.id))
@@ -212,7 +310,14 @@ def _sidebar(screen, world: World, layout: ViewerLayout, sprites: SpriteAtlas,
         draw_badge(screen, x, yy, beh, 17)
         _text(screen, font, beh.label, x + 25, yy,
               beh.color, width - 25)
-        yy += 30
+        yy += 27
+        if observer is not None and selected.id in observer.feedback:
+            last = observer.feedback[selected.id]
+            if last.result != "state":
+                note = "Confirmed" if last.result == "confirmed" else "No confirmed outcome"
+                tone = (105, 220, 151) if last.result == "confirmed" else (249, 166, 113)
+                _text(screen, small_font, f"{last.kind.value}: {note}", x, yy, tone, width)
+                yy += 22
         _meter(screen, x, yy, width, "Health", selected.health, 100, (238, 112, 112),
                small_font)
         yy += 34
@@ -288,7 +393,7 @@ def _header_and_footer(screen, layout: ViewerLayout, world: World,
              (44, 60, 76), radius=8)
     _text(screen, small, "SPACE pause  ·  N step  ·  +/- speed  ·  Wheel zoom  ·  ",
           foot.x + 14, foot.y + 12, LIGHT)
-    _text(screen, small, "Arrows / WASD pan  ·  F fit  ·  H badges  ·  F11 fullscreen  ·  ESC exit",
+    _text(screen, small, "WASD pan · F fit · H icons · E events · T filter · V effects · F11 fullscreen",
           foot.x + 405, foot.y + 12, MUTED, foot.width - 420)
     if not badges:
         _text(screen, small, "Badges hidden", foot.right - 130, foot.y + 27, ACCENT)
@@ -352,6 +457,11 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
     paused = False
     advance_one = False
     badges = True
+    event_effects = True
+    event_feed = True
+    important_events_only = True
+    observer = EventObserver()
+    event_rows = []
     fps = 12
     running = True
     windowed_size = initial_size
@@ -367,10 +477,15 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                 camera.clamp(layout.map)
                 windowed_size = new_size
             elif event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
-                position = camera.tile_at(event.pos, layout.map)
-                if position is not None:
-                    selected_id = next((a.id for a in world.actors.values()
-                                        if a.position == position and not a.sheltered), None)
+                hit = next((cue for box, cue in event_rows if box.collidepoint(event.pos)), None)
+                if hit is not None:
+                    _focus_event(camera, layout.map, hit)
+                    selected_id = hit.actor_id if hit.actor_id in world.actors else None
+                else:
+                    position = camera.tile_at(event.pos, layout.map)
+                    if position is not None:
+                        selected_id = next((a.id for a in world.actors.values()
+                                            if a.position == position and not a.sheltered), None)
             elif event.type == pg.MOUSEWHEEL:
                 camera.zoom(event.y, layout.map, pg.mouse.get_pos())
             elif event.type == pg.KEYDOWN:
@@ -396,6 +511,12 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                     camera.fit(layout.map)
                 elif event.key == pg.K_h:
                     badges = not badges
+                elif event.key == pg.K_e:
+                    event_feed = not event_feed
+                elif event.key == pg.K_t:
+                    important_events_only = not important_events_only
+                elif event.key == pg.K_v:
+                    event_effects = not event_effects
                 elif event.key == pg.K_F11:
                     if not fullscreen:
                         windowed_size = screen.get_size()
@@ -406,22 +527,29 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                     layout = layout_for(*screen.get_size())
                     camera.clamp(layout.map)
         if not paused or advance_one:
+            before = capture_actors(world)
             actions = controller.actions(world) if controller else actions_for(world, mode)
             for aid, action in actions.items():
                 if action.kind in (Kind.MOVE, Kind.DASH, Kind.SNEAK, Kind.CHARGE):
                     if action.dx:
                         faces[aid] = action.dx < 0
             world.step(actions)
+            observer.accept(world, actions, before)
             advance_one = False
             # Visual metadata about dead actors can be released without changing world state.
             if len(faces) > len(world.actors) * 2 + 10:
                 faces = {aid: facing for aid, facing in faces.items() if aid in world.actors}
         screen.fill((15, 24, 35))
         _header_and_footer(screen, layout, world, font_set, fps, paused, badges)
-        draw_world(screen, world, camera, layout.map, sprites, actions, selected_id,
-                   badges=badges, faces=faces)
-        _sidebar(screen, world, layout, sprites, actions, selected_id, regular,
-                 title, small, mode, controller)
+        draw_world(screen, world, camera, layout.map, sprites,
+                   observer.confirmed_actions, selected_id, badges=badges, faces=faces)
+        if event_effects:
+            _event_effects(screen, camera, layout.map, observer, small)
+        event_rows = (_event_panel(screen, camera, layout.map, observer, small,
+                                   important_only=important_events_only)
+                      if event_feed else [])
+        _sidebar(screen, world, layout, sprites, observer.confirmed_actions,
+                 selected_id, regular, title, small, mode, controller, observer)
         pg.display.flip()
         clock.tick(fps)
     pg.quit()
