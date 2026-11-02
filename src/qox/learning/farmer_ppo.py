@@ -81,13 +81,18 @@ def _first_farmer(env: QoxCoreEnv) -> str:
     return next(name for name in env.possible_agents if name.startswith("farmer_"))
 
 
-def train_farmer(options: FarmerTrainOptions, output: str | Path) -> dict:
+def train_farmer(options: FarmerTrainOptions, output: str | Path,
+                 init_checkpoint: str | Path | None = None) -> dict:
     """Perform PPO updates for at least the requested number of farmer actions."""
     torch.set_num_threads(1)
     torch.manual_seed(options.seed)
     np.random.seed(options.seed)
     random.seed(options.seed)
-    model = FarmerPolicy(options.hidden)
+    model = (load_farmer(init_checkpoint) if init_checkpoint is not None else
+             FarmerPolicy(options.hidden))
+    if model.encoder[0].out_features != options.hidden:
+        raise ValueError("Initial farmer checkpoint hidden size mismatch")
+    model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=options.lr, eps=1e-5)
 
     envs = [_fresh_env(options.scenario, options.max_steps) for _ in range(options.worlds)]
