@@ -34,6 +34,16 @@ class SimulationConfig:
     nomad_dash_stamina: float = 3.0
     nomad_attack_stamina: float = 5.0
     nomad_attack_damage: float = 8.0
+    ravager_sneak_stamina: float = 2.5
+    ravager_sneak_energy: float = 0.2
+    ravager_charge_stamina: float = 25.0
+    ravager_charge_energy: float = 3.0
+    ravager_charge_damage: float = 55.0
+    ravager_charge_distance: int = 3
+    ravager_charge_cooldown: int = 6
+    ravager_charge_recovery: int = 2
+    ravager_drag_stamina: float = 2.5
+    ravager_hibernate_metabolism: float = 0.012
 
     def __post_init__(self) -> None:
         if self.width < 8 or self.height < 8:
@@ -44,6 +54,14 @@ class SimulationConfig:
                self.nomad_dash_stamina, self.nomad_attack_stamina,
                self.nomad_attack_damage) <= 0:
             raise ValueError("Nomad costs and damage must be positive")
+        if min(self.ravager_sneak_stamina, self.ravager_sneak_energy,
+               self.ravager_charge_stamina, self.ravager_charge_energy,
+               self.ravager_charge_damage, self.ravager_drag_stamina,
+               self.ravager_hibernate_metabolism) <= 0:
+            raise ValueError("Ravager costs and damage must be positive")
+        if min(self.ravager_charge_distance, self.ravager_charge_cooldown,
+               self.ravager_charge_recovery) < 1:
+            raise ValueError("Ravager charge limits must be positive")
         if self.ecology_interval < 1:
             raise ValueError("ecology_interval must be positive")
         for name in ("farmers", "cows", "nomads", "scavengers", "ravagers"):

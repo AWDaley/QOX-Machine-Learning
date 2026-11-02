@@ -17,7 +17,7 @@ def parser() -> argparse.ArgumentParser:
     simulate.add_argument("--ticks", type=int, default=200)
     simulate.add_argument("--seed", type=int)
     simulate.add_argument("--config", type=Path)
-    simulate.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd"), default="scripted")
+    simulate.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd", "learned-ravager"), default="scripted")
     simulate.add_argument("--report", type=Path)
     simulate.add_argument("--trace", type=Path)
     simulate.add_argument("--checkpoint", type=Path)
@@ -28,7 +28,7 @@ def parser() -> argparse.ArgumentParser:
     view = sub.add_parser("viewer", help="View the world in Pygame (optional extra)")
     view.add_argument("--seed", type=int, default=42)
     view.add_argument("--config", type=Path)
-    view.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd"), default="scripted")
+    view.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd", "learned-ravager"), default="scripted")
     view.add_argument("--checkpoint", type=Path)
     view.add_argument("--cow-checkpoint", type=Path,
                       help="Second checkpoint for learned-herd mode")
@@ -125,6 +125,28 @@ def parser() -> argparse.ArgumentParser:
     comparison.add_argument("--seed", type=int, default=340000)
     comparison.add_argument("--max-steps", type=int, default=96)
     comparison.add_argument("--report", type=Path)
+    ravager_scenarios = ("ravager_ambush", "ravager_carcass",
+                         "ravager_hibernate", "ravager_mixed")
+    predator = sub.add_parser("train-ravager", help="M6: train masked PPO ravager policy")
+    predator.add_argument("--steps", type=int, default=8192)
+    predator.add_argument("--seed", type=int, default=42)
+    predator.add_argument("--worlds", type=int, default=4)
+    predator.add_argument("--rollout", type=int, default=256)
+    predator.add_argument("--max-steps", type=int, default=64)
+    predator.add_argument("--scenario", choices=ravager_scenarios, default="ravager_mixed")
+    predator.add_argument("--output", type=Path, default=Path("runs/ravager.pt"))
+    predator.add_argument("--init-checkpoint", type=Path)
+    for title in ("eval-ravager", "benchmark-ravager"):
+        cmd = sub.add_parser(title, help="M6: frozen ravager policy and ablations")
+        cmd.add_argument("--checkpoint", type=Path)
+        cmd.add_argument("--episodes", type=int, default=16)
+        cmd.add_argument("--seed", type=int, default=100000)
+        cmd.add_argument("--max-steps", type=int, default=64)
+        cmd.add_argument("--scenario", choices=ravager_scenarios, default="ravager_ambush")
+        cmd.add_argument("--mode", choices=("policy", "policy_greedy", "random",
+                                            "scripted", "policy_nocharge", "policy_nosneak",
+                                            "policy_nohibernate"), default="policy_greedy")
+        cmd.add_argument("--report", type=Path)
     inspect = sub.add_parser("inspect", help="Show one actor's local observation and action mask")
     inspect.add_argument("--seed", type=int, default=42)
     inspect.add_argument("--cow-calls", action="store_true",
@@ -136,6 +158,33 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command in ("train-ravager", "eval-ravager", "benchmark-ravager"):
+        try:
+            from .learning.ravager_ppo import (RavagerTrainOptions, train_ravager,
+                                               evaluate_ravager)
+        except ImportError as exc:
+            raise SystemExit("Ravager training requires PyTorch: pip install -e '.[ml]'") from exc
+        if args.command == "train-ravager":
+            result = train_ravager(RavagerTrainOptions(
+                steps=args.steps, seed=args.seed, worlds=args.worlds,
+                rollout=args.rollout, max_steps=args.max_steps, scenario=args.scenario),
+                args.output, init_checkpoint=args.init_checkpoint)
+            print(json.dumps({k: v for k, v in result.items()
+                              if k not in ("history", "recent_returns")}, indent=2))
+            return 0
+        modes = (("policy_greedy", "policy", "random", "scripted",
+                  "policy_nocharge", "policy_nosneak", "policy_nohibernate")
+                 if args.command == "benchmark-ravager" else (args.mode,))
+        results = {mode: evaluate_ravager(
+            args.checkpoint, episodes=args.episodes, seed=args.seed,
+            max_steps=args.max_steps, scenario=args.scenario, mode=mode)
+                   for mode in modes}
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        print(json.dumps({k: {key: value for key, value in report.items()
+                              if key != "results"} for k, report in results.items()}, indent=2))
+        return 0
     if args.command in ("train-herd", "benchmark-herd"):
         try:
             from .learning.joint_ppo import (JointTrainOptions, benchmark_joint,

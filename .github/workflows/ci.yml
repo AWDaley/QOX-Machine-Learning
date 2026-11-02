@@ -20,6 +20,7 @@ jobs:
       - run: qox inspect --species cow --seed 42
       - run: qox inspect --species nomad --seed 42
       - run: qox inspect --species cow --cow-calls --seed 42
+      - run: qox inspect --species ravager --seed 42
   learning:
     runs-on: ubuntu-latest
     steps:
@@ -46,3 +47,8 @@ jobs:
       - run: qox replay --trace runs/ci-herd-trace.json
       - run: qox train-herd --phase cow --cow-checkpoint runs/ci-cow-v2.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --cow-steps 96 --nomad-steps 96 --worlds 2 --rollout 96 --max-steps 24 --epochs 1 --output-dir runs/ci-joint
       - run: qox benchmark-herd --cow-checkpoint runs/ci-joint/cow_round1.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --episodes 2 --max-steps 24 --seed 95000 --report runs/ci-joint-eval.json
+      - run: python -m pytest -q tests/test_m6.py tests/test_ravager_learning.py
+      - run: qox train-ravager --steps 128 --worlds 2 --rollout 64 --max-steps 16 --scenario ravager_mixed --output runs/ci-ravager.pt
+      - run: qox benchmark-ravager --checkpoint runs/ci-ravager.pt --episodes 2 --max-steps 16 --scenario ravager_ambush --seed 92000
+      - run: qox run --ticks 8 --mode learned-ravager --checkpoint runs/ci-ravager.pt --trace runs/ci-ravager-trace.json
+      - run: qox replay --trace runs/ci-ravager-trace.json

@@ -1,6 +1,6 @@
 # QOX Machine Learning
 
-**Current status: M0–M5c implemented (deterministic ecosystem, local perception, cow/farmer PPO, nomad calls/mobile defense, and alternating learned-herd training).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
+**Current status: M0–M6 implemented (deterministic ecosystem, local perception, cow/farmer PPO, learned-herd experiments, and ravager hunting mechanics/training).** QOX is an experimental artificial-life simulation with farmers, cows, nomads, scavengers and ravagers. World rules are deterministic and auditable; emergent strategies must be learned, not scripted as outcomes.
 
 ## Quick start
 
@@ -42,7 +42,7 @@ qox eval-cow --mode random --episodes 20 --seed 100000
 qox inspect --species cow --seed 42
 ```
 
-The `threat` learning scenario includes a minimal scripted ravager contact attack; advanced hunting, stealth and charge mechanics will be added in M6. Do not interpret M3 as demonstrating learned herding or tactical predator evasion yet.
+The `threat` curriculum was designed with an early contact-bite predator; the broader world now also supports the M6 charge and stealth mechanics. Do not interpret M3 as demonstrating learned herding or tactical predator evasion yet.
 
 ## Train farmer networks and test refuge (M4)
 
@@ -99,12 +99,12 @@ See [the controlled call curriculum and paired counterfactual results](docs/M5_S
 - **M3:** Compact PyTorch actor-critic, masked PPO, configurable curricula, saved/checkable policies, frozen-policy evaluation against two baselines, and a learned-cow viewer mode.
 - **M4:** Farmer-only action/observation extension, finite-capacity refuge and food ration accounting, cow crop damage and manure/fertilizer, farmer PPO and agriculture/manure/refuge benchmarks, learned-farmer viewer and trace replay.
 - **M5:** Nomad two-tile dash, melee attacks against ravagers, distinct friendly/scary sound calls with finite costs/cooldowns, opt-in 66-input neural cow observations, 72-input nomad policy and PPO curricula, no-call evaluation ablations, combined learned-herd viewer and trace replay.
-- Simple non-stealth ravager contact attack to create a real early survival threat.
+- **M6:** Ravager sneak, costly wind-up charge, finite carcass relocation, satiety/hibernation, 82-input ravager PPO, learning/evaluation benchmarks and learned-ravager viewer mode.
 - CLI, ANSI and Pygame visualization, structured events, automated Python CI.
 
 ## Not yet implemented
 
-Scavengers and ravagers **do not have learned policies yet**. M6–M9 will add ravager stealth/charge/drag/hibernate, advanced scavenger nutrient competition, solo/combined festivals and reproduction. M5's neural cattle have demonstrated **limited call sensitivity in a controlled task**, but not reliable full-herd communication; and neural nomads have not mastered herding or defense; the effective scripted counterparts are reference policies, not scientific evidence of emergence. The simulation has not demonstrated long-run stable ecology.
+Scavengers **do not have learned policies yet**. M7–M9 will address advanced scavenger nutrient competition, solo/combined festivals and reproduction. M6 ravager learning is **partial**: charge hunting and satiated hibernation show measurable progress in isolated tasks, but safe carcass relocation and stealth are not yet reliably learned. M5's neural cattle have demonstrated **limited call sensitivity in a controlled task**, but not reliable full-herd communication; and neural nomads have not mastered herding or defense; the effective scripted counterparts are reference policies, not scientific evidence of emergence. The simulation has not demonstrated long-run stable ecology.
 
 ## Documents
 
@@ -113,6 +113,7 @@ Scavengers and ravagers **do not have learned policies yet**. M6–M9 will add r
 - [M4 farmer agriculture/refuge and training benchmarks](docs/M4_FARMER_LEARNING.md)
 - [M5 nomad communication, cow-v2 policies and honest benchmarks](docs/M5_NOMADS_COMMUNICATION.md)
 - [M5 controlled two-signal curriculum and counterfactual tests](docs/M5_SIGNAL_CURRICULUM.md)
+- [M6 ravager physics, PPO, test results and remaining gaps](docs/M6_RAVAGER_INTELLIGENCE.md)
 
 ## Scientific reproducibility
 
@@ -151,3 +152,25 @@ qox viewer --mode learned-herd --checkpoint checkpoints/nomad_signal_v2_32k.pt -
 ```
 
 In a separately held-out **48-episode** test, the selected learned cow + unchanged nomad reached **1.96/3** cows to pasture, up from **0.65/3** for the original learned pair; removing the calls reduced arrivals to **1.50/3**, and reversing them to **0.25/3**. Scripted herding remains stronger at **2.77/3**, and the learned-vs-random nomad comparison has wide uncertainty. See the [M5c experiment methodology and limitations](docs/M5C_JOINT_HERD_LEARNING.md). These scores measure short migration scenarios, not demonstrated stable ecology or learned predator defense.
+
+## M6: Ravager hunting and energy management
+
+Ravagers can sneak at half movement frequency, wind up and launch a high-speed
+straight-line charge (with stamina and calorie costs), grab/drag/drop finite
+carcasses, eat to gain satiety, and hibernate to reduce their metabolism.
+Stealth requires cover and distance rather than granting invisibility. Training
+and ablations use a new 82-feature policy without changing old cow, farmer, or
+nomad model formats.
+
+```powershell
+qox train-ravager --scenario ravager_ambush --steps 32768 --output runs/ravager.pt
+qox benchmark-ravager --scenario ravager_ambush --checkpoint runs/ravager.pt --episodes 48 --report runs/m6-benchmark.json
+qox viewer --mode learned-ravager --checkpoint runs/ravager.pt
+```
+
+In held-out short scenarios, the learned greedy ravager killed prey in
+**33.3%** of ambush trials versus **4.2%** for a random legal-action baseline;
+a no-charge ablation produced **0%** kills. A separately trained satiated-rest
+policy saved energy through hibernation. The learned policies have **not** yet
+mastered safe carcass relocation or the complete multi-stage hunting cycle.
+See [M6 experiment details and caveats](docs/M6_RAVAGER_INTELLIGENCE.md).
