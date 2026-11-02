@@ -39,6 +39,7 @@ def test_ravager_ppo_checkpoint_eval_and_inference(tmp_path):
 
 
 def test_ravager_train_validation():
+    pytest.importorskip("torch", reason="Optional machine-learning dependency missing")
     from qox.learning.ravager_ppo import RavagerTrainOptions
     with pytest.raises(ValueError):
         RavagerTrainOptions(steps=-1)
