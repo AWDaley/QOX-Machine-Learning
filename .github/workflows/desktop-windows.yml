@@ -33,7 +33,11 @@ jobs:
         shell: pwsh
         run: |
           & .\dist\QOX\QOX.exe --smoke-test
-          if ($LASTEXITCODE -ne 0) { throw "QOX packaged smoke test failed: $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) {
+            $report = Join-Path $env:TEMP "QOX-startup-error.log"
+            if (Test-Path $report) { Get-Content $report }
+            throw "QOX packaged smoke test failed: $LASTEXITCODE"
+          }
       - name: Create end-user ZIP
         shell: pwsh
         run: |
