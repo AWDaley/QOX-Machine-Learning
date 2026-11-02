@@ -54,8 +54,10 @@ class QoxCoreEnv:
 
     def reset(self, seed: int | None = None,
               options: dict | None = None) -> tuple[dict, dict]:
-        if options:
-            raise ValueError("QOX reset options are not implemented")
+        # PettingZoo may pass nonempty options for API testing. No QOX reset
+        # options are currently interpreted, so safely ignore extra keys.
+        if options is not None and not isinstance(options, dict):
+            raise TypeError("reset options must be a dictionary or None")
         seed = self.config.seed if seed is None else int(seed)
         self.world = World(replace(self.config, seed=seed))
         if self.scenario != "natural":
