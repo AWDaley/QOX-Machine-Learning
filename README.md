@@ -1,48 +1,59 @@
 # QOX Machine Learning
 
-**Status: planning phase — no runnable simulation has been implemented yet.**
+**M0–M1 foundation implemented.** QOX is an experimental deterministic, headless-first, 2D multi-agent artificial-life simulator. Its planned learning phase uses five species-specific neural-network policies: farmers, cows, nomads, scavengers, and ravagers.
 
-QOX Machine Learning is a planned 2D, multi-agent artificial-life simulator. Five populations—**farmers, cows, nomads, scavengers, and ravagers**—will learn through local observations and neural-network policies while competing and cooperating in a shared ecosystem.
+## Run it
 
-The main research question is whether local, resource-based incentives can lead to herding, refuge use, agriculture, ecological recycling, hunting tactics, and successful community festivals without scripting those strategies.
+Python 3.11+; no Docker, database, GPU, or PyTorch needed for M0–M1.
 
-## Design highlights
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e '.[dev]'
+qox run --ticks 200 --mode scripted --seed 42
+python -m pytest -q
+```
 
-| Actor | Role | Distinctive mechanics |
-|---|---|---|
-| Farmers | Settlement-centered food producers | Crops, manure collection/fertilization, storage, refuge |
-| Cows | Herbivores and herd resource | Grazing, crop damage, milk, waste, danger avoidance |
-| Nomads | Fast mobile herders and defenders | Friendly/scary cattle calls, milking, cattle protection |
-| Scavengers | Waste and carrion consumers | Scent-based resource search, competition for manure |
-| Ravagers | Rare apex predators | Sneak, expensive high-speed charge, drag prey, feed, hibernate |
+On macOS/Linux, use `source .venv/bin/activate` instead of the PowerShell activation command.
 
-Farmer-only, nomad-only, and combined festivals require real surplus, explicit contributions and attendance. Festivals create sound/smell cues that can attract existing ravagers; they do not spawn predators.
+To save a report and an exact action trace:
 
-## Implementation roadmap
+```bash
+qox run --ticks 200 --seed 42 --mode random --report runs/report.json --trace runs/trace.json
+qox replay --trace runs/trace.json
+```
 
-See **[the complete implementation plan](docs/IMPLEMENTATION_PLAN.md)** for the full world/actor specification, observation and action design, learning approach, reproducibility rules, risks, and testable milestones.
+For the optional animated viewer:
 
-| Phase | Focus |
-|---|---|
-| M0 | Python package, configuration, CI, CLI foundation |
-| M1 | Deterministic world, ecology, resources, simple viewer |
-| M2 | Perception and PettingZoo multi-agent interface |
-| M3 | First learned cow policy |
-| M4 | Farmer agriculture, manure and settlement refuge |
-| M5 | Nomad herding signals and defense |
-| M6 | Ravager stealth, charge, prey handling and hibernation |
-| M7 | Scavengers and nutrient cycling |
-| M8 | Solo and combined festivals; ravager attraction |
-| M9 | Reproduction, integrated learning and held-out evaluation |
+```bash
+python -m pip install -e '.[viewer]'
+qox viewer --seed 42 --mode scripted
+```
 
-## Engineering principles
+Viewer controls: **Space** pause/resume, **N** single step, **+/-** speed, **Esc** quit. The viewer is observational only; simulation physics do not depend on its framerate. Initial viewer uses colored circles: blue farmers, white cows, orange nomads, purple scavengers, red ravagers; violet squares mark settlements.
 
-- **Train headlessly; render separately.** Viewer framerate must not change simulation outcomes.
-- **Physics and resources are explicit; strategies are learned.**
-- **Reproducibility first:** fixed seeds, action traces, event logs and deterministic world updates.
-- **CPU-first:** Python, PyTorch, compact policies, Pygame viewer; no Docker or database required.
-- **Test against baselines:** do not treat plausible-looking behavior as proof of learning.
+Use `qox run --config configs/default.toml --ticks 300` to load a TOML configuration. CLI `--seed` overrides the config seed. Also supported: `python -m qox run ...`.
 
-## Next implementation step
+## Implemented (M0–M1)
 
-Start with **M0** followed by a minimal **M1** world running scripted/random actors. Confirm deterministic replay and resource conservation before adding neural-network training.
+- Seeded world creation and validated config.
+- 2D terrain with soil fertility, grass, crops, cover, finite waste and carcasses.
+- Simultaneous cardinal movement with seeded conflict resolution, support for swaps and blocked chains.
+- Five actor types with energy/stamina and simple scripted/random **baselines**.
+- Cows consume grass or farmer crops and convert real intake into milk and dung.
+- Farmers can plant, harvest, collect manure, fertilize, deposit and eat food.
+- Nomads can collect nearby cow milk and consume it.
+- Scavengers can eat manure or carrion; ravagers can eat carrion.
+- Hunger, death and finite carcasses; ecology advances at a configurable slower interval.
+- Structured event ledger, state hashes, seeded action trace and replay verification.
+- CLI, basic optional Pygame viewer, pytest and GitHub Actions CI.
+
+## Not yet implemented
+
+**These are planned, not existing functionality:** neural-network training, learned perception, farmer refuge, nomad friendly/scary calls and combat, ravager stealth/charge/hunting/dragging/hibernation, group festivals, births and long-term policy evaluation. The M1 baseline actors are not learned policies, and M1 resource tuning is preliminary.
+
+Read the [full implementation plan](docs/IMPLEMENTATION_PLAN.md) for milestone gates M0–M9 and research experiments. **Next milestone: M2 (local perception and the PettingZoo adapter), followed by M3 (first learned cow PPO policy).**
+
+## Engineering rules
+
+World rules and finite resource accounting are explicit; learned strategies will live outside the world engine. Always distinguish scripted baseline behavior from learned behavior, keep deterministic scenario seeds and action traces, and evaluate frozen policies on held-out worlds. Reports and logs in `runs/` are local artifacts and are ignored by git.

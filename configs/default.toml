@@ -1,0 +1,20 @@
+[world]
+width = 40
+height = 40
+seed = 42
+ecology_interval = 5
+
+[population]
+farmers = 12
+cows = 30
+nomads = 6
+scavengers = 12
+ravagers = 3
+
+[resources]
+max_grass = 10.0
+max_crop = 8.0
+max_waste = 10.0
+grass_growth = 0.45
+crop_growth = 0.55
+waste_decay = 0.12
