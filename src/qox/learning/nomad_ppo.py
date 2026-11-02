@@ -16,7 +16,7 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-from ..actions import Action, Kind
+from ..actions import Kind
 from ..agents import scripted_actions
 from ..entities import Species
 from ..envs.core import QoxCoreEnv

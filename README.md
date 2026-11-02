@@ -76,7 +76,18 @@ qox benchmark-cow --checkpoint runs/cow-v2.pt --scenario nomad_herd --episodes 1
 qox viewer --mode learned-herd --checkpoint runs/nomad.pt --cow-checkpoint runs/cow-v2.pt
 ```
 
-**Learning is not yet reliable:** the sampled M5 nomad PPO performed similarly to random legal actions in held-out pasture tests and still trails the scripted herder; the cow-v2 model achieved some navigation gains but did **not** show a causal benefit from nomad calls. See [M5 mechanics, benchmarks, and limitations](docs/M5_NOMADS_COMMUNICATION.md). Do not treat a scripted cow responding to audio as a trained behavior.
+**Full-herd learning is not yet reliable:** the first nomad PPO performed similarly to random legal actions in held-out pasture tests and still trails the scripted herder; the original M5 cow-v2 model showed no clear causal benefit from calls in the full migration scenario. See [M5 mechanics, benchmarks, and limitations](docs/M5_NOMADS_COMMUNICATION.md). Do not treat scripted call responses as trained behavior.
+
+### Controlled signal-learning follow-up
+
+The newer `cow_signal` curriculum independently randomizes the nomad's position and whether **friendly means approach** or **scary means retreat**, then rewards actual movement to an unseen training waypoint. This isolates call interpretation from visible pasture. A 65,536-decision cow PPO run reached its target on **57/96 (59.4%)** held-out episodes, versus **38/96 (39.6%)** with no calls, **0/96 with reversed calls**, and **17/96 (17.7%)** for random legal actions. The scripted responder achieved 75/96. This is a limited but encouraging learned signal-response result—not yet coordinated herding.
+
+```powershell
+qox train-cow --scenario cow_signal --cow-calls --steps 65536 --worlds 4 --rollout 256 --max-steps 24 --seed 513 --output runs/cow-signal.pt
+qox benchmark-cow --checkpoint runs/cow-signal.pt --scenario cow_signal --episodes 96 --seed 205000 --max-steps 24 --report runs/cow-signal-results.json
+```
+
+See [the controlled call curriculum and paired counterfactual results](docs/M5_SIGNAL_CURRICULUM.md).
 
 ## Implemented
 
@@ -93,7 +104,7 @@ qox viewer --mode learned-herd --checkpoint runs/nomad.pt --cow-checkpoint runs/
 
 ## Not yet implemented
 
-Scavengers and ravagers **do not have learned policies yet**. M6–M9 will add ravager stealth/charge/drag/hibernate, advanced scavenger nutrient competition, solo/combined festivals and reproduction. M5's neural cattle **have not demonstrated reliable signal comprehension**, and neural nomads have not mastered herding or defense; the effective scripted counterparts are reference policies, not scientific evidence of emergence. The simulation has not demonstrated long-run stable ecology.
+Scavengers and ravagers **do not have learned policies yet**. M6–M9 will add ravager stealth/charge/drag/hibernate, advanced scavenger nutrient competition, solo/combined festivals and reproduction. M5's neural cattle have demonstrated **limited call sensitivity in a controlled task**, but not reliable full-herd communication; and neural nomads have not mastered herding or defense; the effective scripted counterparts are reference policies, not scientific evidence of emergence. The simulation has not demonstrated long-run stable ecology.
 
 ## Documents
 
@@ -101,6 +112,7 @@ Scavengers and ravagers **do not have learned policies yet**. M6–M9 will add r
 - [M2–M3 observations, training and baseline results](docs/M2_M3_LEARNING.md)
 - [M4 farmer agriculture/refuge and training benchmarks](docs/M4_FARMER_LEARNING.md)
 - [M5 nomad communication, cow-v2 policies and honest benchmarks](docs/M5_NOMADS_COMMUNICATION.md)
+- [M5 controlled two-signal curriculum and counterfactual tests](docs/M5_SIGNAL_CURRICULUM.md)
 
 ## Scientific reproducibility
 

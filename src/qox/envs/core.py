@@ -30,7 +30,7 @@ class QoxCoreEnv:
                  cow_calls: bool = False, allow_nomad_calls: bool = True):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed"):
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal"):
             raise ValueError(f"Unknown scenario: {scenario}")
         if config is None:
             if scenario == "forage":
@@ -50,6 +50,10 @@ class QoxCoreEnv:
                                           nomads=1, scavengers=0,
                                           ravagers=1 if scenario == "nomad_defend" else 0,
                                           grass_growth=0.12, cow_metabolism=0.16)
+            elif scenario == "cow_signal":
+                config = SimulationConfig(width=20, height=20, farmers=0, cows=1,
+                                          nomads=1, scavengers=0, ravagers=0,
+                                          cow_metabolism=0.12, grass_growth=0.0)
             elif scenario == "refuge":
                 config = SimulationConfig(width=12, height=12, farmers=1, cows=0,
                                           nomads=0, scavengers=0, ravagers=1)
@@ -68,6 +72,8 @@ class QoxCoreEnv:
         self.cow_calls = cow_calls
         self.allow_nomad_calls = allow_nomad_calls
         self.reached_goal_ids: set[int] = set()
+        self.signal_kind: Kind | None = None
+        self.flip_signal = False  # Counterfactual: different call, same world target.
         self.max_steps = max_steps
         self.world: World
         self.possible_agents: list[str] = []
@@ -110,6 +116,9 @@ class QoxCoreEnv:
         rng = random.Random(seed ^ 0x45AB90)
         if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
             self._nomad_scenario(rng, seed)
+            return
+        if self.scenario == "cow_signal":
+            self._cow_signal_scenario(rng)
             return
         if self.scenario in ("agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed"):
             self._farmer_scenario(rng, seed)
@@ -198,6 +207,33 @@ class QoxCoreEnv:
             # A wounded predator can be beaten by a coordinated defense, but
             # is individually much more threatening than a nomad.
             predator.health = 64.0
+        self.world.check_invariants()
+
+    def _cow_signal_scenario(self, rng: random.Random) -> None:
+        """Balanced two-signal conditioning, independent of fixed map direction.
+
+        The training goal is hidden from the cow: only a correct interpretation
+        of the nomad's locally audible call identifies the direction. Friendly
+        means approach the caller; scary means move away from it. Calling never
+        applies forces, and the destination is a *curriculum* waypoint rather
+        than a target supplied to the network. This is not a full herd task.
+        """
+        cow = next(a for a in self.world.actors.values() if a.species == Species.COW)
+        nomad = next(a for a in self.world.actors.values() if a.species == Species.NOMAD)
+        dx, dy = rng.choice(((1, 0), (-1, 0), (0, 1), (0, -1)))
+        self.signal_kind = rng.choice((Kind.FRIENDLY_CALL, Kind.SCARY_CALL))
+        cow.x, cow.y, cow.energy = 10, 10, 75
+        # Put caller one tile to the side, never directly in the way.
+        nomad.x, nomad.y = (10 + 2 * dx - dy, 10 + 2 * dy + dx)
+        nomad.stamina = 100
+        side = 1 if self.signal_kind == Kind.FRIENDLY_CALL else -1
+        self.world.herd_goal = (10 + 5 * dx * side, 10 + 5 * dy * side)
+        for tile in self.world.grid.tiles:
+            tile.cover = 0.0
+            tile.grass = 0.01  # no visible pasture clue or alternative nutrition
+            tile.crop = tile.waste = 0.0
+            tile.planted = False
+            tile.fertility = 0.2
         self.world.check_invariants()
 
     def _farmer_scenario(self, rng: random.Random, seed: int) -> None:
@@ -292,6 +328,12 @@ class QoxCoreEnv:
                                     ACTIONS[actor.species][choice])
             elif self.scripted_others:
                 chosen = scripted[actor.id]
+                if self.scenario == "cow_signal" and actor.species == Species.NOMAD:
+                    kind = (Kind.SCARY_CALL if self.signal_kind == Kind.FRIENDLY_CALL
+                            else Kind.FRIENDLY_CALL) if self.flip_signal else self.signal_kind
+                    cooldown = (actor.friendly_cooldown if kind == Kind.FRIENDLY_CALL
+                                else actor.scary_cooldown)
+                    chosen = Action(kind) if cooldown == 0 else Action(Kind.REST)
                 if (not self.allow_nomad_calls and actor.species == Species.NOMAD
                         and chosen.kind in (Kind.FRIENDLY_CALL, Kind.SCARY_CALL)):
                     chosen = Action()
@@ -329,7 +371,8 @@ class QoxCoreEnv:
                 value = 0.0
             rewards[name] += value
             components[name][event.kind] += value
-        if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+        if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed",
+                             "cow_signal"):
             actual_cows = {aid: a for aid, a in self.world.actors.items()
                            if a.species == Species.COW}
             gained = set()
@@ -350,7 +393,7 @@ class QoxCoreEnv:
                                      if aid not in self.reached_goal_ids
                                      and abs(cow.x - goal[0]) + abs(cow.y - goal[1]) <= 2}
                     gained.update(newly_reached)
-                    for aid in newly_reached:
+                    for _ in newly_reached:
                         rewards[name] += 2.0
                         components[name]["new_cow_in_pasture"] += 2.0
                 # Penalize harm to cattle, rather than paying a nomad for

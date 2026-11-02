@@ -38,26 +38,26 @@ def parser() -> argparse.ArgumentParser:
     train.add_argument("--worlds", type=int, default=4)
     train.add_argument("--rollout", type=int, default=512)
     train.add_argument("--max-steps", type=int, default=96)
-    train.add_argument("--scenario", choices=("forage", "threat", "nomad_herd"), default="forage")
+    train.add_argument("--scenario", choices=("forage", "threat", "nomad_herd", "cow_signal"), default="forage")
     train.add_argument("--cow-calls", action="store_true",
                        help="Train v2 66-feature cow policy to interpret nomad calls")
     train.add_argument("--output", type=Path, default=Path("runs/cow.pt"))
     evaluate = sub.add_parser("eval-cow", help="Evaluate a frozen cow policy or baseline")
     evaluate.add_argument("--checkpoint", type=Path)
-    evaluate.add_argument("--mode", choices=("policy", "policy_nocalls", "random",
-                                           "scripted", "scripted_nocalls"),
+    evaluate.add_argument("--mode", choices=("policy", "policy_nocalls", "policy_flipped", "random",
+                                           "scripted", "scripted_nocalls", "scripted_flipped"),
                           default="policy")
     evaluate.add_argument("--episodes", type=int, default=20)
     evaluate.add_argument("--seed", type=int, default=100000)
     evaluate.add_argument("--max-steps", type=int, default=96)
-    evaluate.add_argument("--scenario", choices=("forage", "threat", "nomad_herd"), default="forage")
+    evaluate.add_argument("--scenario", choices=("forage", "threat", "nomad_herd", "cow_signal"), default="forage")
     evaluate.add_argument("--report", type=Path)
     benchmark = sub.add_parser("benchmark-cow", help="Compare policy to two baselines")
     benchmark.add_argument("--checkpoint", type=Path, required=True)
     benchmark.add_argument("--episodes", type=int, default=20)
     benchmark.add_argument("--seed", type=int, default=100000)
     benchmark.add_argument("--max-steps", type=int, default=96)
-    benchmark.add_argument("--scenario", choices=("forage", "threat", "nomad_herd"), default="forage")
+    benchmark.add_argument("--scenario", choices=("forage", "threat", "nomad_herd", "cow_signal"), default="forage")
     benchmark.add_argument("--report", type=Path)
     farmer_scenarios = ("agriculture", "manure", "refuge", "farmer_mixed")
     train_farmer = sub.add_parser("train-farmer", help="Train farmer PPO with crop/manure/refuge curricula")
@@ -173,7 +173,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({key: value for key, value in result.items()
                               if key not in ("history", "recent_returns")}, indent=2))
             return 0
-        modes = (("policy", "policy_nocalls", "random", "scripted", "scripted_nocalls")
+        modes = (("policy", "policy_nocalls", "policy_flipped", "random", "scripted",
+                  "scripted_nocalls", "scripted_flipped")
+                 if args.command == "benchmark-cow" and args.scenario == "cow_signal"
+                 else ("policy", "policy_nocalls", "random", "scripted", "scripted_nocalls")
                  if args.command == "benchmark-cow" and args.scenario == "nomad_herd"
                  else ("policy", "random", "scripted") if args.command == "benchmark-cow"
                  else (args.mode,))

@@ -69,10 +69,10 @@ class TrainOptions:
             raise ValueError("rollout must be a multiple of worlds")
         if self.epochs < 1 or self.minibatch < 1 or self.hidden < 1:
             raise ValueError("epochs, minibatch and hidden must be positive")
-        if self.scenario not in ("forage", "threat", "nomad_herd"):
-            raise ValueError("Cow training supports forage, threat or nomad_herd")
-        if self.scenario == "nomad_herd" and not self.cow_calls:
-            raise ValueError("nomad_herd requires cow_calls=True / v2 observation")
+        if self.scenario not in ("forage", "threat", "nomad_herd", "cow_signal"):
+            raise ValueError("Cow training supports forage, threat, nomad_herd, or cow_signal")
+        if self.scenario in ("nomad_herd", "cow_signal") and not self.cow_calls:
+            raise ValueError("herding/cow_signal requires cow_calls=True / v2 observation")
         if not (0 < self.gamma <= 1 and 0 <= self.gae_lambda <= 1 and 0 < self.clip < 1):
             raise ValueError("Invalid PPO hyperparameters")
 
@@ -254,7 +254,8 @@ def evaluate_cow(checkpoint: str | Path | None = None,
                  mode: str = "policy") -> dict:
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes/max_steps must be positive")
-    if mode not in ("policy", "policy_nocalls", "random", "scripted", "scripted_nocalls"):
+    if mode not in ("policy", "policy_nocalls", "policy_flipped", "random",
+                    "scripted", "scripted_nocalls", "scripted_flipped"):
         raise ValueError("Unknown cow evaluation mode")
     if mode.startswith("policy") and checkpoint is None:
         raise ValueError("Policy evaluation needs a checkpoint")
@@ -264,9 +265,10 @@ def evaluate_cow(checkpoint: str | Path | None = None,
     for episode in range(episodes):
         env = _fresh_env(scenario, seed + episode, max_steps,
                          cow_calls=(model.cow_calls if model is not None
-                                    else scenario == "nomad_herd"),
+                                    else scenario in ("nomad_herd", "cow_signal")),
                          allow_nomad_calls=not mode.endswith("nocalls"))
         observations, _ = env.reset(seed=seed + episode)
+        env.flip_signal = mode.endswith("flipped")
         cow_name = _first_cow(env)
         ep_return = 0.0
         for _ in range(max_steps):
@@ -295,18 +297,35 @@ def evaluate_cow(checkpoint: str | Path | None = None,
         cow = env.world.actors.get(env.name_to_id[cow_name])
         graze = sum(ev.amount for ev in env.world.events
                     if ev.actor_id == env.name_to_id[cow_name] and ev.kind == "graze")
-        results.append({"seed": seed + episode, "return": round(ep_return, 4),
-                        "grazed": round(graze, 4), "alive": cow is not None,
-                        "final_energy": round(cow.energy, 4) if cow else 0,
-                        "in_pasture": int(env.name_to_id[cow_name] in env.reached_goal_ids),
-                        "calls": sum(ev.kind in ("friendly_call", "scary_call")
-                                     for ev in env.world.events),
-                        "ticks": env.world.tick})
-    return {"mode": mode, "scenario": scenario, "seed_start": seed,
-            "episodes": episodes, "mean_return": round(float(np.mean([x["return"] for x in results])), 4),
-            "mean_grazed": round(float(np.mean([x["grazed"] for x in results])), 4),
-            "survival_rate": round(float(np.mean([x["alive"] for x in results])), 4),
-            "pasture_arrival_rate": round(float(np.mean([x["in_pasture"] for x in results])), 4),
-            "mean_calls": round(float(np.mean([x["calls"] for x in results])), 4),
-            "mean_final_energy": round(float(np.mean([x["final_energy"] for x in results])), 4),
-            "results": results}
+        entry = {"seed": seed + episode, "return": round(ep_return, 4),
+                 "grazed": round(graze, 4), "alive": cow is not None,
+                 "final_energy": round(cow.energy, 4) if cow else 0,
+                 "in_pasture": int(env.name_to_id[cow_name] in env.reached_goal_ids),
+                 "calls": sum(ev.kind in ("friendly_call", "scary_call")
+                              for ev in env.world.events),
+                 "ticks": env.world.tick}
+        if scenario == "cow_signal":
+            goal = env.world.herd_goal
+            entry["signal_type"] = env.signal_kind.value
+            entry["final_goal_distance"] = (abs(cow.x - goal[0]) + abs(cow.y - goal[1])
+                                            if cow else None)
+        results.append(entry)
+    summary = {"mode": mode, "scenario": scenario, "seed_start": seed,
+               "episodes": episodes, "mean_return": round(float(np.mean([x["return"] for x in results])), 4),
+               "mean_grazed": round(float(np.mean([x["grazed"] for x in results])), 4),
+               "survival_rate": round(float(np.mean([x["alive"] for x in results])), 4),
+               "pasture_arrival_rate": round(float(np.mean([x["in_pasture"] for x in results])), 4),
+               "mean_calls": round(float(np.mean([x["calls"] for x in results])), 4),
+               "mean_final_energy": round(float(np.mean([x["final_energy"] for x in results])), 4),
+               "results": results}
+    if scenario == "cow_signal":
+        summary["arrival_by_signal"] = {
+            kind: round(float(np.mean([x["in_pasture"] for x in results
+                                       if x["signal_type"] == kind])), 4)
+            for kind in ("friendly_call", "scary_call")
+            if any(x["signal_type"] == kind for x in results)
+        }
+        summary["mean_final_goal_distance"] = round(float(np.mean([
+            x["final_goal_distance"] for x in results
+            if x["final_goal_distance"] is not None])), 4)
+    return summary

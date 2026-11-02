@@ -96,6 +96,8 @@ qox inspect --species cow --cow-calls
 
 The new physics is covered by tests for call radius/decay, type separation, cooldown and resource expenditure, no forced cow movement, dash path collision and stamina use, nomad-vs-ravager attacks, herd seed variability, no-call ablations, checkpoint schemas, two learned policies running together, and replay. The optional PettingZoo API contract is run in GitHub CI where dependencies are installed.
 
-**Next research step (before treating communication as learned):** expand training seeds and cover/obstacle layouts, randomize pasture and caller assignments more aggressively, compare v2 cows to v1 in identical worlds, test both-signal confusion, vary nomad/cow population and defend scenarios, improve reward credit assignment, evaluate multi-species co-training against unseen opponent checkpoints, and require significant results across multiple train seeds. None of these research milestones should be inferred from the current scripted results.
+See also [`M5_SIGNAL_CURRICULUM.md`](M5_SIGNAL_CURRICULUM.md) for a follow-up controlled two-signal learning experiment, held-out counterfactual evaluation and its limitations.
+
+**Next research step (before treating full herding as learned):** expand training seeds and cover/obstacle layouts, randomize pasture and caller assignments more aggressively, compare v2 cows to v1 in identical worlds, test both-signal confusion, vary nomad/cow population and defend scenarios, improve reward credit assignment, evaluate multi-species co-training against unseen opponent checkpoints, and require significant results across multiple train seeds. None of these research milestones should be inferred from the current scripted results.
 
 M6 will implement ravager sneak/charge/drag/hibernate and is outside the M5 scope.
