@@ -21,6 +21,7 @@ from .replay_session import ReplayCursor
 from .viewer_analytics import draw_decision, draw_graphs
 from .trace import Trace
 from .world import World
+from .world_save import save_world
 
 SPECIES_COLORS = {
     Species.FARMER: (70, 140, 245),
@@ -456,13 +457,21 @@ def _load_controller(mode: str, checkpoint, cow_checkpoint, scenario: str):
 def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
             cow_checkpoint=None, scenario: str = "natural", active_controller=None,
             replay_trace: Trace | None = None,
-            record_trace: str | None = None) -> None:
+            record_trace: str | None = None,
+            initial_world: World | None = None,
+            save_policy_files=None,
+            save_options: dict[str, bool] | None = None) -> None:
     pg = _pygame()
-    if replay_trace is not None and record_trace is not None:
-        raise ValueError("Cannot record and replay simultaneously")
+    if replay_trace is not None and (record_trace is not None or initial_world is not None):
+        raise ValueError("Cannot combine replay with world continuation or recording")
+    if record_trace is not None and initial_world is not None:
+        raise ValueError("Cannot record an action trace beginning in a saved world")
     cursor = ReplayCursor(replay_trace) if replay_trace is not None else None
     if cursor is not None:
         world = cursor.world
+        config = world.config
+    elif initial_world is not None:
+        world = initial_world
         config = world.config
     elif scenario == "natural":
         world = World(config)
@@ -475,6 +484,8 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
     controller = (None if cursor is not None else
                   active_controller or _load_controller(mode, checkpoint, cow_checkpoint, scenario))
     recording = Trace(config.as_dict()) if record_trace else None
+    if initial_world is not None and mode not in ("scripted", "random", "idle", "multi-learned"):
+        raise ValueError("Resumed world mode must be scripted, random, idle, or multi-learned")
     pg.init()
     info = pg.display.Info()
     desktop_width = info.current_w if info.current_w >= 740 else 1500
@@ -499,8 +510,12 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
     observation_scroll = 0
     telemetry = Telemetry(sample_every=8)
     telemetry.observe(world, force=True)
-    feedback_note = ""
-    paused = cursor is not None
+    feedback_note = "F5 save world · Ctrl+S Save As · File > Open saved world to resume"
+    world_save_options = save_options or {
+        "sample_actions": bool(getattr(controller, "sample_actions", True)),
+        "festival_assist": bool(getattr(controller, "festival_assist", False)),
+    }
+    paused = cursor is not None or initial_world is not None
     advance_one = False
     badges = True
     event_effects = True
@@ -597,6 +612,42 @@ def display(config: SimulationConfig, mode: str = "scripted", checkpoint=None,
                     observation_scroll = max(0, observation_scroll - 5)
                 elif event.key == pg.K_k:
                     observation_scroll += 5
+                elif event.key == pg.K_F5 or (event.key == pg.K_s and
+                                               event.mod & pg.KMOD_CTRL):
+                    if cursor is not None:
+                        feedback_note = "Replay viewing cannot be saved as a live world"
+                        continue
+                    from pathlib import Path
+                    folder = Path.home() / "Documents" / "QOX" / "Worlds"
+                    default = folder / f"seed{config.seed}_tick{world.tick:07d}.qoxworld"
+                    destination = default
+                    if event.key == pg.K_s:
+                        # Explicit Save As; a short Tk file dialog is supported
+                        # by the existing Windows/Tk desktop executable.
+                        import tkinter as tk
+                        from tkinter import filedialog
+                        dialog = tk.Tk()
+                        dialog.withdraw()
+                        try:
+                            chosen = filedialog.asksaveasfilename(
+                                parent=dialog, title="Save QOX world",
+                                initialdir=str(folder), initialfile=default.name,
+                                defaultextension=".qoxworld",
+                                filetypes=[("QOX world saves", "*.qoxworld")])
+                        finally:
+                            dialog.destroy()
+                        if not chosen:
+                            continue
+                        destination = Path(chosen)
+                    try:
+                        stored = save_world(
+                            world, destination,
+                            mode="multi-learned" if mode == "multi-learned" else mode,
+                            policy_files=save_policy_files,
+                            options=world_save_options)
+                        feedback_note = f"Saved world: {stored.name} at tick {world.tick}"
+                    except (OSError, ValueError) as exc:
+                        feedback_note = f"World save failed: {exc}"
                 elif event.key == pg.K_x:
                     try:
                         from pathlib import Path
