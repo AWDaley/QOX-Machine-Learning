@@ -12,8 +12,7 @@ from .agents import actions_for
 from .config import SimulationConfig
 from .entities import Species
 from .population import is_juvenile
-from .sprites import (BEHAVIORS, SpriteAtlas, actor_behavior, draw_badge,
-                      sprite_pixels)
+from .sprites import BEHAVIORS, SpriteAtlas, actor_behavior, draw_badge
 from .viewer_layout import Camera, Rect, ViewerLayout, layout_for
 from .world import World
 
