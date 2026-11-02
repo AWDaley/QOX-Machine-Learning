@@ -35,6 +35,8 @@ class Actor:
     stamina: float = 100.0
     health: float = 100.0
     age: int = 0
+    parent_id: int | None = None
+    last_birth_tick: int = -1000000
     carried_food: float = 0.0
     carried_waste: float = 0.0
     milk: float = 0.0

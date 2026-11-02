@@ -47,6 +47,19 @@ class SimulationConfig:
     # M7: digestion leaves only a fraction of scavenged matter as recyclable residue.
     scavenger_residue_fraction: float = 0.12
     carcass_fertility_return: float = 0.015
+    # M9: explicitly opt in; existing RL checkpoints and old experiments stay unchanged.
+    population_dynamics_enabled: bool = False  # Age, juvenile limits, senescence.
+    reproduction_enabled: bool = False  # Births, on top of population dynamics.
+    reproduction_interval: int = 10
+    births_per_species_limit: int = 64  # Lifetime slots; never reassign a dead agent ID.
+    max_farmers: int = 24
+    max_cows: int = 60
+    max_nomads: int = 18
+    max_scavengers: int = 24
+    max_ravagers: int = 6
+    reproduction_energy_threshold: float = 82.0
+    reproduction_energy_cost: float = 32.0
+    offspring_energy: float = 22.0
     # M8: disabled by default to preserve pre-M8 training and simulation baselines.
     festival_enabled: bool = False
     festival_duration: int = 8
@@ -94,6 +107,19 @@ class SimulationConfig:
             "festival_farmer_grain", "festival_nomad_milk",
             "festival_combined_grain", "festival_combined_milk")):
             raise ValueError("Festival resource requirements must be positive")
+        if self.reproduction_interval < 1 or self.births_per_species_limit < 0:
+            raise ValueError("Reproduction interval must be positive; birth slots nonnegative")
+        if any(getattr(self, name) < 0 for name in (
+            "max_farmers", "max_cows", "max_nomads", "max_scavengers", "max_ravagers")):
+            raise ValueError("Species population caps must be nonnegative")
+        if (not 0 < self.reproduction_energy_threshold <= 100 or
+                not 0 < self.offspring_energy <= self.reproduction_energy_cost or
+                not 0 < self.reproduction_energy_cost < self.reproduction_energy_threshold):
+            raise ValueError("Reproduction must cost more energy than an offspring receives")
+        if self.reproduction_enabled:
+            for name in ("farmers", "cows", "nomads", "scavengers", "ravagers"):
+                if getattr(self, name) > getattr(self, f"max_{name}"):
+                    raise ValueError(f"Initial {name} exceeds its species population cap")
         if self.ecology_interval < 1:
             raise ValueError("ecology_interval must be positive")
         for name in ("farmers", "cows", "nomads", "scavengers", "ravagers"):

@@ -10,6 +10,7 @@ from gymnasium import spaces
 from pettingzoo.utils.env import ParallelEnv
 
 from ..config import SimulationConfig
+from ..entities import Species
 from ..perception import action_catalog, observation_size
 from .core import QoxCoreEnv
 
@@ -41,11 +42,13 @@ class QoxParallelEnv(ParallelEnv):
         self.observation_spaces = {}
         self.action_spaces = {}
         for name in self.possible_agents:
-            actor = self.core.world.actors[self.core.name_to_id[name]]
-            n = len(action_catalog(actor.species, festivals=self.festival_actions))
+            # Some declared slots do not have a living actor until a birth.
+            species = (self.core.world.actors[self.core.name_to_id[name]].species
+                       if name in self.core.name_to_id else Species(name.split("_", 1)[0]))
+            n = len(action_catalog(species, festivals=self.festival_actions))
             self.observation_spaces[name] = spaces.Dict({
                 "observation": spaces.Box(low=-1, high=1,
-                                           shape=(observation_size(actor.species, cow_calls=self.cow_calls,
+                                           shape=(observation_size(species, cow_calls=self.cow_calls,
                                                                    nomad_v2=self.nomad_v2,
                                                                    festivals=self.festival_actions),), dtype=np.float32),
                 "action_mask": spaces.MultiBinary(n),

@@ -59,3 +59,17 @@ festival_combined_milk = 4.0
 festival_farmers_required = 2
 festival_nomads_required = 2
 festival_cows_required = 2
+
+# M9 (optional): configure these in [population]. Disabled by default.
+# population_dynamics_enabled = true
+# reproduction_enabled = true
+# reproduction_interval = 10
+# births_per_species_limit = 64
+# max_farmers = 24
+# max_cows = 60
+# max_nomads = 18
+# max_scavengers = 24
+# max_ravagers = 6
+# reproduction_energy_threshold = 82.0
+# reproduction_energy_cost = 32.0
+# offspring_energy = 22.0

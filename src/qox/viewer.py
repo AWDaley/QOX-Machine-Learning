@@ -137,11 +137,13 @@ def display(config: SimulationConfig, mode: str = "scripted",
             pygame.draw.circle(screen, (123, 43, 33),
                                (carcass.x * tile_px + tile_px // 2,
                                 carcass.y * tile_px + tile_px // 2), tile_px // 3)
+        from .population import is_juvenile
         for actor in world.actors.values():
             if actor.sheltered:
                 continue  # occupants are represented by the settlement badge
             cx, cy = actor.x * tile_px + tile_px // 2, actor.y * tile_px + tile_px // 2
-            pygame.draw.circle(screen, COLORS[actor.species], (cx, cy), max(3, tile_px // 3))
+            radius = max(2, tile_px // 5) if is_juvenile(world, actor) else max(3, tile_px // 3)
+            pygame.draw.circle(screen, COLORS[actor.species], (cx, cy), radius)
             if actor.species == Species.COW:
                 pygame.draw.circle(screen, (30, 30, 30), (cx, cy), max(1, tile_px // 9))
             if actor.species == Species.RAVAGER:
@@ -170,7 +172,8 @@ def display(config: SimulationConfig, mode: str = "scripted",
         if selected is not None:
             info = (f"#{selected.id} {selected.species.value}  "
                     f"energy:{selected.energy:.1f} hp:{selected.health:.1f} "
-                    f"stamina:{selected.stamina:.1f}"
+                    f"stamina:{selected.stamina:.1f} age:{selected.age}"
+                    f" {'JUVENILE' if is_juvenile(world, selected) else 'ADULT'}"
                     f" {'SHELTERED' if selected.sheltered else 'outside'}")
             if selected.species == Species.RAVAGER:
                 info += (f" sat:{selected.satiety:.2f} "
