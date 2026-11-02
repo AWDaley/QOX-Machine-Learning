@@ -12,6 +12,8 @@ on:
       - 'src/qox/training_lab.py'
       - 'src/qox/learning/**'
       - 'src/qox/viewer.py'
+      - 'src/qox/world_save.py'
+      - 'tests/test_m15_*.py'
       - 'src/qox/viewer_events.py'
       - 'src/qox/viewer_analytics.py'
       - 'src/qox/decision_inspector.py'
@@ -42,7 +44,7 @@ jobs:
       - name: Exercise event overlays using a headless Pygame surface
         run: |
           python -m pip install pytest
-          python -m pytest -q tests/test_m12_pygame.py tests/test_m12_events.py tests/test_m13_analytics.py tests/test_m13_pygame.py tests/test_m14_training_lab.py
+          python -m pytest -q tests/test_m12_pygame.py tests/test_m12_events.py tests/test_m13_analytics.py tests/test_m13_pygame.py tests/test_m14_training_lab.py tests/test_m15_world_save.py tests/test_m15_pygame.py
       - name: Build portable desktop folder
         run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name QOX --collect-submodules qox --collect-all pygame qox_desktop.py
       - name: Verify the packaged executable can load, save and run five networks

@@ -21,6 +21,8 @@ def parser() -> argparse.ArgumentParser:
     simulate.add_argument("--mode", choices=("scripted", "random", "idle", "learned-cow", "learned-farmer", "learned-nomad", "learned-herd", "learned-ravager", "learned-scavenger", "learned-festival"), default="scripted")
     simulate.add_argument("--report", type=Path)
     simulate.add_argument("--trace", type=Path)
+    simulate.add_argument("--save-world", type=Path,
+                          help="Write a resumable .qoxworld snapshot at the final tick")
     simulate.add_argument("--checkpoint", type=Path)
     simulate.add_argument("--festivals", action="store_true", help="Enable M8 festivals")
     simulate.add_argument("--reproduction", action="store_true", help="Enable M9 births and juveniles")
@@ -28,6 +30,12 @@ def parser() -> argparse.ArgumentParser:
                           help="Second checkpoint for learned-herd mode")
     check = sub.add_parser("replay", help="Verify deterministic action trace")
     check.add_argument("--trace", type=Path, required=True)
+    resume = sub.add_parser("resume-world", help="Continue a saved scripted/random/idle world")
+    resume.add_argument("--input", type=Path, required=True)
+    resume.add_argument("--ticks", type=int, default=200)
+    resume.add_argument("--output", type=Path,
+                        help="Write the continued world to a new .qoxworld file")
+    resume.add_argument("--report", type=Path)
     replay_viewer = sub.add_parser("replay-viewer", help="Graphical, seekable trace replay")
     replay_viewer.add_argument("--trace", type=Path, required=True)
     view = sub.add_parser("viewer", help="View the world in Pygame (optional extra)")
@@ -44,6 +52,8 @@ def parser() -> argparse.ArgumentParser:
                       help="Second checkpoint for learned-herd mode")
     view.add_argument("--record-trace", type=Path,
                       help="Record viewer actions for later replay-viewer inspection")
+    view.add_argument("--load-world", type=Path,
+                      help="Resume a saved scripted/random/idle world in the viewer")
     study = sub.add_parser("population-study", help="M9: frozen-policy long-horizon multi-seed ecology evaluation")
     study.add_argument("--ticks", type=int, default=600)
     study.add_argument("--seeds", type=int, default=3)
@@ -504,6 +514,25 @@ def main(argv: list[str] | None = None) -> int:
         trace = Trace.load(args.trace)
         display(SimulationConfig(**trace.config), replay_trace=trace)
         return 0
+    if args.command == "resume-world":
+        from .agents import actions_for
+        from .world_save import load_world, save_world
+        restored, info = load_world(args.input)
+        if info.mode == "multi-learned":
+            raise SystemExit("Learned world requires matching .qox networks: "
+                             "use File > Open saved world in QOX.exe")
+        if args.ticks < 0:
+            raise SystemExit("--ticks must be nonnegative")
+        for _ in range(args.ticks):
+            restored.step(actions_for(restored, info.mode))
+        if args.output:
+            save_world(restored, args.output, mode=info.mode, options=info.options)
+        report = restored.summary()
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps(report, indent=2))
+        return 0
     config = SimulationConfig.from_toml(args.config) if args.config else SimulationConfig()
     if args.seed is not None:
         config = replace(config, seed=args.seed)
@@ -514,10 +543,21 @@ def main(argv: list[str] | None = None) -> int:
                          reproduction_enabled=True)
     if args.command == "viewer":
         from .viewer import display
-        display(config, mode=args.mode, checkpoint=args.checkpoint,
-                cow_checkpoint=args.cow_checkpoint,
-                scenario=args.festival_scenario,
-                record_trace=args.record_trace)
+        if args.load_world:
+            from .world_save import load_world
+            if args.record_trace:
+                raise SystemExit("Cannot record an existing world as a new trace")
+            restored, info = load_world(args.load_world)
+            if info.mode == "multi-learned":
+                raise SystemExit("Learned world requires matching .qox networks: "
+                                 "use File > Open saved world in QOX.exe")
+            display(restored.config, mode=info.mode, initial_world=restored,
+                    save_options=info.options)
+        else:
+            display(config, mode=args.mode, checkpoint=args.checkpoint,
+                    cow_checkpoint=args.cow_checkpoint,
+                    scenario=args.festival_scenario,
+                    record_trace=args.record_trace)
         return 0
     world, trace = run(config, ticks=args.ticks, mode=args.mode,
                        record=args.trace is not None, checkpoint=args.checkpoint,
@@ -528,6 +568,12 @@ def main(argv: list[str] | None = None) -> int:
         args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
     if trace is not None:
         trace.save(args.trace)
+    if args.save_world:
+        from .world_save import save_world
+        if args.mode not in ("scripted", "random", "idle"):
+            raise SystemExit("For saved neural worlds use QOX.exe with all five model "
+                             "checkpoints so the exact policies can be verified")
+        save_world(world, args.save_world, mode=args.mode)
     print(json.dumps(report, indent=2))
     return 0
 

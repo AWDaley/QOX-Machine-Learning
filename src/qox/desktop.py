@@ -12,6 +12,7 @@ from .config import SimulationConfig
 from .desktop_models import ModelSession, MultiPolicyController, ROLES
 from .entities import Species
 from .training_lab import CheckpointHistory
+from .world_save import load_world
 
 
 ROLE_LABELS = {species.value: species.value.capitalize() for species in ROLES}
@@ -58,11 +59,50 @@ class QoxDesktop:
         """Replay and recording controls without crowding the main launcher."""
         menu = tk.Menu(self.root)
         file_menu = tk.Menu(menu, tearoff=False)
+        file_menu.add_command(label="Open saved world...", command=self._open_world)
+        file_menu.add_separator()
         file_menu.add_command(label="Open recorded world replay...", command=self._open_replay)
         file_menu.add_checkbutton(label="Record next simulation as trace",
                                   variable=self.record_next_var)
         menu.add_cascade(label="File", menu=file_menu)
         self.root.configure(menu=menu)
+
+    def _policy_files(self) -> dict[str, Path]:
+        return {species.value: self.session.path(species) for species in ROLES}
+
+    def _open_world(self):
+        """Resume a whole-world save without replacing neural-model checkpoints."""
+        if self.busy:
+            return
+        filename = filedialog.askopenfilename(
+            parent=self.root, title="Open saved QOX world",
+            filetypes=[("QOX world saves", "*.qoxworld")])
+        if not filename:
+            return
+        try:
+            # Exact policy hashes are checked when the saved world used networks.
+            world, info = load_world(filename, policy_files=self._policy_files())
+            controller = None
+            if info.mode == "multi-learned":
+                controller = MultiPolicyController(
+                    self.session,
+                    sample_actions=info.options["sample_actions"],
+                    festival_assist=info.options["festival_assist"])
+                self.stochastic_var.set(info.options["sample_actions"])
+            from .viewer import display
+            self.root.withdraw()
+            try:
+                display(world.config, mode=info.mode,
+                        active_controller=controller, initial_world=world,
+                        save_policy_files=self._policy_files() if controller else None,
+                        save_options=info.options)
+                self.status_var.set(
+                    f"Closed resumed world {Path(filename).name} at tick {world.tick}. "
+                    "Save models separately to preserve learned policies.")
+            finally:
+                self.root.deiconify()
+        except Exception as exc:
+            messagebox.showerror("Cannot load world", str(exc), parent=self.root)
 
     def _open_replay(self):
         if self.busy:
@@ -170,8 +210,9 @@ class QoxDesktop:
                                "assist; all other behavior comes from the five neural networks."),
                   style="Muted.TLabel", wraplength=700).grid(
             row=14, column=0, columnspan=3, sticky="w", pady=(9, 5))
-        ttk.Label(frame, text=("Save stores model weights and training progress, not the "
-                               "current world's positions or resources. Save after training."),
+        ttk.Label(frame, text=("Save Model Set stores neural weights (.qox). In the viewer "
+                               "press F5 or Ctrl+S to save the world (.qoxworld); "
+                               "File > Open saved world resumes it. Learned worlds require matching models."),
                   style="Muted.TLabel", wraplength=700).grid(
             row=15, column=0, columnspan=3, sticky="w", pady=(0, 9))
         ttk.Separator(frame, orient="horizontal").grid(row=16, column=0, columnspan=3,
@@ -281,6 +322,9 @@ class QoxDesktop:
                 trace_path = folder / f"trace_seed{config.seed}_{uuid4().hex[:8]}.json"
             display(config, mode="scripted" if scripted else "multi-learned",
                     active_controller=controller,
+                    save_policy_files=None if scripted else self._policy_files(),
+                    save_options={"sample_actions": self.stochastic_var.get(),
+                                  "festival_assist": self.festivals_var.get() if not scripted else False},
                     record_trace=str(trace_path) if trace_path is not None else None)
             self.status_var.set(
                 f"Saved action trace to {trace_path}" if trace_path is not None else
@@ -347,6 +391,21 @@ def smoke_test() -> int:
         for _ in range(3):
             world.step(controller.actions(world))
         assert world.tick == 3
+        from .world_save import load_world, save_world
+        policy_files = {species.value: loaded.path(species) for species in ROLES}
+        saved = save_world(world, root / "test-world.qoxworld", mode="multi-learned",
+                           policy_files=policy_files,
+                           options={"sample_actions": True, "festival_assist": False})
+        resumed, info = load_world(saved, policy_files=policy_files)
+        assert resumed.state_hash() == world.state_hash()
+        assert info.mode == "multi-learned"
+        for _ in range(2):
+            direct = controller.actions(world)
+            replayed = controller.actions(resumed)
+            assert direct == replayed
+            world.step(direct)
+            resumed.step(replayed)
+            assert resumed.state_hash() == world.state_hash()
     return 0
 
 
