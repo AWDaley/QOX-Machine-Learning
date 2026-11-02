@@ -95,10 +95,10 @@ def main(argv: list[str] | None = None) -> int:
         state = observe(world, actor)
         print(json.dumps({"actor": actor.id, "species": actor.species.value,
                           "features": dict(zip(FEATURES,
-                                               state["observation"].astype(float).tolist())),
+                                               state["observation"].astype(float).tolist(), strict=True)),
                           "legal_actions": [action.to_dict()
                                             for action, is_legal in zip(ACTIONS[actor.species],
-                                                                        state["action_mask"])
+                                                                        state["action_mask"], strict=True)
                                             if is_legal]}, indent=2))
         return 0
     if args.command == "replay":
