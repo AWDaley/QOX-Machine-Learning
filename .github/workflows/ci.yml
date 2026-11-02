@@ -60,6 +60,8 @@ jobs:
       - run: qox replay --trace runs/ci-herd-trace.json
       - run: qox train-herd --phase cow --cow-checkpoint runs/ci-cow-v2.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --cow-steps 96 --nomad-steps 96 --worlds 2 --rollout 96 --max-steps 24 --epochs 1 --output-dir runs/ci-joint
       - run: qox benchmark-herd --cow-checkpoint runs/ci-joint/cow_round1.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --episodes 2 --max-steps 24 --seed 95000 --report runs/ci-joint-eval.json
+      - run: qox train-herd --scenario nomad_mixed --partner-mode sample --phase cow --cow-checkpoint runs/ci-cow-v2.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --cow-steps 96 --nomad-steps 96 --worlds 2 --rollout 96 --max-steps 24 --epochs 1 --output-dir runs/ci-m16
+      - run: qox compare-herd --baseline-cow runs/ci-cow-v2.pt --baseline-nomad runs/ci-nomad-transfer.pt --candidate-cow runs/ci-m16/cow_round1.pt --candidate-nomad runs/ci-nomad-transfer.pt --episodes 2 --max-steps 24 --seed 95500 --report runs/ci-m16-compare.json
       - run: python -m pytest -q tests/test_m6.py tests/test_ravager_learning.py
       - run: qox train-ravager --steps 128 --worlds 2 --rollout 64 --max-steps 16 --scenario ravager_mixed --output runs/ci-ravager.pt
       - run: qox benchmark-ravager --checkpoint runs/ci-ravager.pt --episodes 2 --max-steps 16 --scenario ravager_ambush --seed 92000
