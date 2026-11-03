@@ -1,8 +1,8 @@
 # M16h — Interleaved on-policy farmer curricula
 
-**Status:** Implemented for staged training and the global farmer sweep;
-controlled M4-baseline evaluation in progress. No model is installed
-automatically.
+**Status:** Implemented, tested and evaluated against the archived M4 farmer.
+The matched-budget study produced **0/6 development qualifiers**, so the
+independent audit stayed closed. No model was installed automatically.
 
 ## Motivation
 
@@ -99,3 +99,54 @@ study is **four cycles versus one cycle at exactly the same larger budget**.
 With only three training seeds, report individual results as well as means.
 Do not open the blind audit for a failed development study, or silently
 promote an underperforming network.
+
+## First M4-baseline experiment — completed
+
+The run used the verified M4 checkpoint SHA-256 above, all predeclared
+training and evaluation parameters, 60 stages/segments and 98,304 PPO
+decisions. The M4 baseline averaged **3.3314 deposited food** and **2.2815
+manure applied** in the 48 safe development farmsteads. Differences below
+are candidate *minus the same M4 baseline*, with threatened survival in
+percentage points and threatened final-health changes in health units.
+
+| Cycles | Train seed | Safe food Δ | Safe manure Δ | Threat survival Δ | Threat health Δ | Gate |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | 17 | −0.3309 | −2.2815 | −4.17 pp | −27.2292 | Rejected |
+| 1 | 37 | −0.4242 | −2.2815 | 0 pp | −3.5000 | Rejected |
+| 1 | 59 | −1.2746 | −1.7213 | 0 pp | −1.2500 | Rejected |
+| 4 | 17 | −0.3560 | −2.2815 | 0 pp | +0.7500 | Rejected |
+| 4 | 37 | −0.3560 | −2.2815 | 0 pp | −2.0000 | Rejected |
+| 4 | 59 | −0.3560 | −2.2815 | 0 pp | +0.7500 | Rejected |
+
+At these seeds, four-cycle training was more consistent than sequential
+training on food deposition and avoided the severe threatened-health
+failure of the sequential seed-17 candidate. Mean differences across
+the three *training seeds* were:
+
+| Schedule | Mean safe food Δ vs. M4 | Mean safe manure Δ vs. M4 | Mean threatened health Δ vs. M4 |
+| --- | ---: | ---: | ---: |
+| Sequential (1 cycle) | −0.6766 | −2.0948 | −10.6597 |
+| Interleaved (4 cycles) | −0.3560 | −2.2815 | −0.1667 |
+
+These are descriptive summaries of only three independently trained
+networks, not statistical proof that interleaving improves survival. Even
+the better food/health averages remained below the untouched M4 reference.
+For example, the four-cycle seed-17 policy's paired 95% bootstrap interval
+for safe food change was **[−0.7071, +0.0093]**, while its manure change
+was **[−2.5413, −2.0328]**. Its mean safe manure application was zero.
+
+The manure failure across all three interleaved policies is particularly
+informative. In the current environment reward implementation, fertilizer
+events earn only **0.025 per unit**, compared with **0.55 per unit** for
+food deposits; collecting waste itself receives no immediate event bonus.
+This is an *inference*, not a proven cause, but repeated exposure cannot
+guarantee learning of a weakly rewarded multi-step behavior. An appropriate
+next controlled test would strengthen manure **training-only** credit
+assignment and independently evaluate useful food, manure and survival,
+without modifying finite world resources or relaxing the acceptance gate.
+
+**Decision: 0/6 development qualifiers, no selected candidate, no audit,
+no promotion.** All candidate checkpoints and per-seed comparisons were
+retained outside Git; audit seed blocks 3.0M/3.1M remain unused. The study
+provides useful negative evidence, not an independently validated learned
+farmer improvement.

@@ -462,4 +462,7 @@ The interleaved segment is validated to be long enough for at least one
 complete mixed-farmstead episode per worker. The control and interleaved
 model sets remain separate, the original M4 checkpoint is read-only, and
 only one development-qualified candidate may use the blind audit range.
-See [M16h methodology and results](docs/M16H_INTERLEAVED_FARMER.md).
+In the first six-candidate M4 study, interleaving improved average safe food
+and threatened health relative to sequential training, but all candidates
+still lagged M4 on food/manure and **none qualified**. The audit remained
+unused; no model was installed. See [M16h methodology and results](docs/M16H_INTERLEAVED_FARMER.md).

@@ -167,10 +167,12 @@ All PRs should include small acceptance tests, no accidental feature/action shap
 
 A user can launch QOX, recognize exactly what the actors are doing, inspect what each network perceived and chose, follow events and population charts, train and compare candidate models, save both models and world separately, replay a failure, and run reproducible long-term stability studies across different seeds.
 
-**Current recommended follow-up:** Evaluate M16h matched-budget interleaved
-on-policy agriculture/manure/refuge practice against the M4 baseline on
-independent development seeds. M16g KL rehearsal alone did not improve
-held-out farming. Then finish M16
+**Current recommended follow-up:** M16h interleaved on-policy training was
+more consistent than its sequential control on food and threatened health,
+but all six policies failed M4's farming/manure gate. Investigate finite
+manure-task credit assignment (currently 0.025 reward/unit for fertilizer
+versus 0.55 for food deposit) with an isolated training-only reward study.
+M16g KL rehearsal alone also did not improve held-out farming. Then finish M16
 replication with independent partner policies and begin M17
 multi-seed ecological calibration before shipping a performance-focused M18
 release. The original M12 event-visibility foundation is already merged.
