@@ -1,7 +1,8 @@
 # M16g — Frozen-policy rehearsal against catastrophic forgetting
 
-**Status:** Implemented in the experimental farmer PPO and sweep runner.
-No policy is automatically promoted or installed.
+**Status:** Implemented and evaluated against the archived M4 farmer.
+The first nine-candidate development experiment produced **0 qualifiers**;
+no audit was opened and no policy was promoted or installed.
 
 ## Research question
 
@@ -96,6 +97,70 @@ deposited** relative to M4, near-preserved manure, safe and threatened
 survival, health and crop metrics. Merely matching M4 is evidence of
 retention, not an acceptable improvement. No trained policy is installed
 automatically. If all candidates fail development, audit remains untouched.
+
+## First controlled M4-baseline experiment — completed
+
+The actual run used the archived 32,768-decision M4 baseline (SHA-256
+`5036afd395239049b5b99cef4aec7b99277c118eec705cb185fe3124a77938dd`),
+survival weight 3×, **1,024 PPO decisions × 2 epochs per stage**, replay KL
+weights 0/1/5, training seeds 17/37/59, and 48 development worlds per
+scenario with 192-tick evaluation horizons. Development seeds start at
+1,800,000; audit seeds were reserved at 2,800,000.
+
+The no-rehearsal control's final policy weights were verified **exactly
+equal, tensor by tensor, for all three training seeds** to the archived
+M16f 3×-safety, 1,024-decision candidates. Therefore differences in the
+new cross-replay comparisons are not caused by altered control PPO.
+
+The M4 baseline averaged **3.5955 deposited food** and **2.2879 manure
+applied** in the 48 safe development farmsteads. Deltas below are candidate
+minus that same M4 baseline. In the threatened development worlds,
+*all* nine candidates matched M4's survival rate, so the survival delta
+is 0 percentage points throughout.
+
+| Rehearsal KL | Train seed | Safe food Δ | Safe manure Δ | Development gate |
+| ---: | ---: | ---: | ---: | --- |
+| 0 (control) | 17 | −0.6202 | −2.2229 | Rejected |
+| 0 (control) | 37 | −0.6622 | +0.5773 | Rejected |
+| 0 (control) | 59 | −0.6622 | −1.2547 | Rejected |
+| 1 | 17 | −0.6622 | −2.2103 | Rejected |
+| 1 | 37 | −0.6202 | −2.2879 | Rejected |
+| 1 | 59 | −0.6202 | −2.2879 | Rejected |
+| 5 | 17 | −1.3565 | −1.5602 | Rejected |
+| 5 | 37 | −0.7934 | −1.0586 | Rejected |
+| 5 | 59 | −1.1784 | −2.2100 | Rejected |
+
+The KL=5/seed-17 candidate had a paired 95% bootstrap interval of
+**[−1.8135, −0.8893]** for safe food deposition, so this is not merely a
+small point-estimate dip. For this fixed short-budget experiment, rehearsal
+did **not** solve the food-production or manure-retention problem.
+
+To distinguish failed optimization from failed behavioral transfer, the
+complete deterministic 1,152-state M4 rehearsal set was separately scored
+against each final policy. Teacher-to-student masked KL averaged across the
+three training seeds was approximately:
+
+| Rehearsal weight | Mean KL on M4 training states | Mean safe food Δ |
+| ---: | ---: | ---: |
+| 0 | 0.06039 | −0.6482 |
+| 1 | 0.03410 | −0.6342 |
+| 5 | 0.00282 | −1.1094 |
+
+The replay contained **91 skill-action states** (plant, harvest, deposit,
+collect waste, fertilize) among 1,152 observed states. The KL=5 models
+typically followed the teacher more closely on these stored states but
+performed worse on new farmsteads. This is consistent with a limitation in
+**training-state coverage** or a constraint that suppresses useful
+adaptation; it does not by itself prove the cause. Old-state KL reduction
+must not be mistaken for ecological improvement.
+
+**Decision: 0/9 development qualifiers; no candidate selected, no audit
+conducted, no model installed.** The audit seed blocks remain unused.
+Checkpoints, frozen-teacher sample hashes and complete paired-development
+reports were preserved outside Git for replication. This negative result
+supports testing *interleaved on-policy agriculture/manure episodes* or
+targeted recovery-state rehearsal next, rather than simply increasing KL
+strength again.
 
 ## Limitations
 

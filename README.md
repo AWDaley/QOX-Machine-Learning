@@ -439,4 +439,7 @@ qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir 
 Only a development-qualified candidate may enter the one-time audit, and
 no weights are installed automatically. The experiment records teacher
 sample hashes, action counts and per-stage KL alongside the usual paired
-world comparisons. See [M16g methods and findings](docs/M16G_FARMER_REHEARSAL.md).
+world comparisons. In the first nine-candidate M4 study, stronger rehearsal
+reduced KL on the old training states but **did not retain food production
+on new farmsteads**; all nine candidates failed development. No audit was
+run or model promoted. See [M16g methods and findings](docs/M16G_FARMER_REHEARSAL.md).

@@ -167,8 +167,10 @@ All PRs should include small acceptance tests, no accidental feature/action shap
 
 A user can launch QOX, recognize exactly what the actors are doing, inspect what each network perceived and chose, follow events and population charts, train and compare candidate models, save both models and world separately, replay a failure, and run reproducible long-term stability studies across different seeds.
 
-**Current recommended follow-up:** Evaluate M16g frozen-policy rehearsal
-against M4 using independent development seeds and the one-time audit gate.
-Then finish M16 replication with independent partner policies and begin M17
+**Current recommended follow-up:** M16g frozen-policy rehearsal lowered
+teacher KL but none of nine candidates preserved farming well enough to
+qualify. Test interleaved on-policy agriculture/manure episodes or recovery-
+state rehearsal before repeating the safety audit. Then finish M16
+replication with independent partner policies and begin M17
 multi-seed ecological calibration before shipping a performance-focused M18
 release. The original M12 event-visibility foundation is already merged.
