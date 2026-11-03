@@ -60,7 +60,7 @@ class FarmerTrainOptions:
     hidden: int = 64
 
     def __post_init__(self) -> None:
-        if self.scenario not in ("agriculture", "refuge", "manure", "farmer_mixed"):
+        if self.scenario not in ("agriculture", "refuge", "manure", "farmer_mixed", "farmstead", "farmstead_threat", "farmstead_mixed"):
             raise ValueError("Unrecognized farmer training scenario")
         if self.steps < 1 or self.max_steps < 1 or self.worlds < 1:
             raise ValueError("Steps, max_steps and worlds must be positive")
@@ -243,16 +243,18 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
         raise ValueError("episodes/max_steps must be positive")
     if scenario not in ("agriculture", "refuge", "manure", "farmer_mixed"):
         raise ValueError("Invalid farmer evaluation scenario")
-    if mode not in ("policy", "scripted", "random"):
+    if mode not in ("policy", "scripted", "random",
+                    "policy_no_fertilize", "policy_no_refuge"):
         raise ValueError("Invalid evaluation mode")
-    if mode == "policy" and checkpoint is None:
+    if mode.startswith("policy") and checkpoint is None:
         raise ValueError("Policy evaluation needs a checkpoint")
-    model = load_farmer(checkpoint) if mode == "policy" else None
+    model = load_farmer(checkpoint) if mode.startswith("policy") else None
     chooser = np.random.default_rng(seed)
     results = []
     for episode in range(episodes):
         env = _fresh_env(scenario, max_steps)
         states, _ = env.reset(seed=seed + episode)
+        initial_home_food = env.world.settlements[0].stored_food
         name = _first_farmer(env)
         aid = env.name_to_id[name]
         total_reward, sheltered_steps = 0.0, 0
@@ -266,9 +268,16 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                 if not state["action_mask"][choice]:
                     choice = 0
             else:
+                mask = state["action_mask"].copy()
+                restricted = ({"policy_no_fertilize": {Kind.FERTILIZE},
+                               "policy_no_refuge": {Kind.ENTER_REFUGE}}
+                              .get(mode, set()))
+                for index, action in enumerate(ACTIONS[Species.FARMER]):
+                    if action.kind in restricted:
+                        mask[index] = 0
                 with torch.no_grad():
                     dist, _ = model(torch.as_tensor(state["observation"]).unsqueeze(0),
-                                    torch.as_tensor(state["action_mask"]).unsqueeze(0))
+                                    torch.as_tensor(mask).unsqueeze(0))
                     choice = int(dist.probs.argmax(dim=1).item())
             states, rewards, terminated, truncated, _ = env.step({name: choice})
             total_reward += rewards[name]
@@ -282,6 +291,8 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
         totals = {kind: sum(e.amount for e in events if e.kind == kind)
                   for kind in ("harvest", "deposit", "collect_waste", "fertilize")}
         home = env.world.settlements[0]
+        crop_eaten = sum(e.amount for e in env.world.events
+                         if e.kind == "graze" and e.detail == "crop")
         results.append({"seed": seed + episode, "return": round(total_reward, 4),
                         "alive": bool(actor), "final_health": round(actor.health, 3) if actor else 0,
                         "harvested": round(totals["harvest"], 3),
@@ -290,7 +301,9 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                         "fertilized": round(totals["fertilize"], 3),
                         "sheltered_steps": sheltered_steps,
                         "refuge_entries": sum(e.kind == "enter_refuge" for e in events),
-                        "final_home_food": round(home.stored_food, 3)})
+                        "final_home_food": round(home.stored_food, 3),
+                        "net_store_change": round(home.stored_food - initial_home_food, 3),
+                        "crop_eaten_by_cows": round(crop_eaten, 3)})
     def avg(key: str) -> float:
         return round(float(np.mean([row[key] for row in results])), 4)
     return {"mode": mode, "scenario": scenario, "seed_start": seed,
@@ -298,6 +311,8 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
             "mean_deposited": avg("deposited"), "mean_harvested": avg("harvested"),
             "mean_waste_collected": avg("waste_collected"),
             "mean_fertilized": avg("fertilized"),
+            "mean_net_store_change": avg("net_store_change"),
+            "mean_crop_eaten_by_cows": avg("crop_eaten_by_cows"),
             "mean_sheltered_steps": avg("sheltered_steps"),
             "mean_final_health": avg("final_health"),
             "survival_rate": avg("alive"), "results": results}
