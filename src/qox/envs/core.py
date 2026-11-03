@@ -38,7 +38,7 @@ class QoxCoreEnv:
                  nomad_v2: bool = False, festival_actions: bool = False):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "nomad_convoy", "nomad_convoy_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed", "scavenger_waste", "scavenger_carrion", "scavenger_competition", "scavenger_mixed",
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "farmstead", "farmstead_threat", "farmstead_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "nomad_convoy", "nomad_convoy_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed", "scavenger_waste", "scavenger_carrion", "scavenger_competition", "scavenger_mixed",
                             "festival_farmer", "festival_nomad", "festival_combined",
                             "festival_ravager"):
             raise ValueError(f"Unknown scenario: {scenario}")
@@ -65,9 +65,9 @@ class QoxCoreEnv:
                 config = SimulationConfig(width=12, height=12, farmers=0, cows=2,
                                           nomads=0, scavengers=0, ravagers=1,
                                           cow_metabolism=0.7)
-            elif scenario in ("agriculture", "manure", "farmer_mixed"):
+            elif scenario in ("agriculture", "manure", "farmer_mixed", "farmstead", "farmstead_threat", "farmstead_mixed"):
                 config = SimulationConfig(width=12, height=12, farmers=1, cows=1,
-                                          nomads=0, scavengers=0, ravagers=0,
+                                          nomads=0, scavengers=0, ravagers=int(scenario == "farmstead_threat"),
                                           crop_growth=0.42, grass_growth=0.32)
             elif scenario in ("nomad_herd", "nomad_defend", "nomad_mixed", "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed"):
                 config = SimulationConfig(width=14, height=12, farmers=0, cows=3,
@@ -146,6 +146,9 @@ class QoxCoreEnv:
                                                 if self.scenario in ("nomad_guard_mixed",
                                                                      "nomad_convoy_mixed")
                                                 else int(seed % 2)))
+        if self.scenario == "farmstead_mixed":
+            # Vary threat at reset; do not inject predators mid-episode.
+            config = replace(config, ravagers=int(seed % 2 == 1))
         if self.scenario == "farmer_mixed":
             # Training-only curriculum: instantiate the correct finite
             # population for each task rather than leave extra predators
@@ -209,6 +212,9 @@ class QoxCoreEnv:
             return
         if self.scenario == "nomad_signal":
             self._nomad_signal_scenario(rng)
+            return
+        if self.scenario in ("farmstead", "farmstead_threat", "farmstead_mixed"):
+            self._farmstead_scenario(rng, seed)
             return
         if self.scenario in ("agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed"):
             self._farmer_scenario(rng, seed)
@@ -629,6 +635,50 @@ class QoxCoreEnv:
                 cow.x, cow.y = home.x + 3, home.y + 1
                 self.world.grid.get(*cow.position).grass = 4.5
         self.world.check_invariants()
+
+    def _farmstead_scenario(self, rng: random.Random, seed: int) -> None:
+        """Long-horizon farming, finite manure, and optional real predator.
+
+        All resources exist physically at reset. The network chooses behavior.
+        """
+        world = self.world
+        home = world.settlements[0]
+        farmer = next(a for a in world.actors.values()
+                      if a.species == Species.FARMER)
+        farmer.x, farmer.y = home.x + 1, home.y
+        farmer.energy, farmer.health, farmer.stamina = 68.0, 100.0, 100.0
+        farmer.carried_food, farmer.carried_waste = 0.9, 0.0
+        home.stored_food = 2.0
+        for tile in world.grid.tiles:
+            tile.planted = False
+            tile.crop = 0.0
+            tile.waste = 0.0
+            tile.fertility, tile.grass, tile.cover = 0.38, 0.12, 0.0
+        fields = [(home.x + 1, home.y), (home.x + 2, home.y),
+                  (home.x + 1, home.y + 1), (home.x + 1, home.y - 1),
+                  (home.x - 1, home.y), (home.x + 2, home.y - 1)]
+        rotation = seed % len(fields)
+        for index, position in enumerate(fields):
+            tile = world.grid.get(*position)
+            tile.fertility = (0.24, 0.36, 0.52, 0.72)[(index + rotation) % 4]
+            if (index + rotation) % 3 != 0:
+                tile.planted = True
+                tile.crop = (0.30, 1.15, 1.90)[(index + rotation) % 3]
+        world.grid.get(home.x + 2, home.y).waste = 2.3
+        world.grid.get(home.x - 1, home.y).waste = 1.0
+        cow = next(a for a in world.actors.values()
+                   if a.species == Species.COW)
+        cow.x, cow.y = home.x + 2, home.y + 2
+        cow.energy, cow.health, cow.stamina = 74.0, 100.0, 100.0
+        world.grid.get(*cow.position).grass = 5.0 + rng.random()
+        world.grid.get(*cow.position).fertility = 0.8
+        predator = next((a for a in world.actors.values()
+                         if a.species == Species.RAVAGER), None)
+        if predator is not None:
+            predator.x = home.x + 4
+            predator.y = home.y - (1 if seed % 4 < 2 else 0)
+            predator.health, predator.stamina = 65.0, 100.0
+        world.check_invariants()
 
     def _legal_mask(self, actor) -> "np.ndarray":
         """Scenario curriculum restrictions in addition to physics legality.
