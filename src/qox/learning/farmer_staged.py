@@ -37,6 +37,7 @@ class StagedFarmerOptions:
     rehearsal_episodes: int = 4
     rehearsal_max_steps: int = 96
     interleave_cycles: int = 1
+    manure_credit: float = 0.0
 
     def __post_init__(self) -> None:
         seeds = self.training_seeds
@@ -64,6 +65,8 @@ class StagedFarmerOptions:
             raise ValueError("Survival weight must be between 1 and 20")
         if not 0 <= self.rehearsal_kl <= 10.0:
             raise ValueError("Rehearsal KL must be between 0 and 10")
+        if not 0.0 <= self.manure_credit <= 2.0:
+            raise ValueError("Manure credit must be between 0 and 2")
         if not 1 <= self.rehearsal_episodes < 100_000 or self.rehearsal_max_steps < 1:
             raise ValueError("Rehearsal episodes and horizon must be positive")
         # Each comparison evaluates two blocks: safe seeds, then threat seeds
@@ -185,7 +188,8 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                     max_steps=options.max_steps_override or recommended_steps,
                     scenario=scenario, hidden=hidden,
                     survival_weight=options.survival_weight if stage_index >= 2 else 1.0,
-                    rehearsal_kl=options.rehearsal_kl)
+                    rehearsal_kl=options.rehearsal_kl,
+                    manure_credit=options.manure_credit)
                 if rehearsal is None:
                     result = train_farmer(stage_options, checkpoint, init_checkpoint=previous)
                 else:
@@ -198,6 +202,9 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                     "survival_weight": stage_options.survival_weight,
                     "rehearsal_kl": stage_options.rehearsal_kl,
                     "final_rehearsal_kl": result.get("final_rehearsal_kl", 0.0),
+                    "manure_collected": result.get("manure_collected", 0.0),
+                    "manure_applied": result.get("manure_applied", 0.0),
+                    "manure_credit_awarded": result.get("manure_credit_awarded", 0.0),
                     "completed_episodes": result["completed_episodes"],
                 })
                 previous = checkpoint

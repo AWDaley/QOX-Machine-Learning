@@ -1,6 +1,6 @@
 # QOX — Recommended Improvement Roadmap (M12–M18)
 
-**Status:** M12–M15 merged; M16 research in progress through M16h, with no
+**Status:** M12–M15 merged; M16 research in progress through M16i, with no
 unqualified experimental models promoted. M17–M18 remain planned.
 **Repository:** https://github.com/AWDaley/QOX-Machine-Learning  
 **Baseline:** M11 resizable pixel-art viewer, M10 desktop launcher, M0–M9 simulation and neural-network systems.  
@@ -169,10 +169,13 @@ A user can launch QOX, recognize exactly what the actors are doing, inspect what
 
 **Current recommended follow-up:** M16h interleaved on-policy training was
 more consistent than its sequential control on food and threatened health,
-but all six policies failed M4's farming/manure gate. Investigate finite
-manure-task credit assignment (currently 0.025 reward/unit for fertilizer
-versus 0.55 for food deposit) with an isolated training-only reward study.
-M16g KL rehearsal alone also did not improve held-out farming. Then finish M16
-replication with independent partner policies and begin M17
+but all six policies failed M4's farming/manure gate. M16i isolates finite
+manure-task training credit (0, 0.3 and 1.0 per useful fertilizer unit, plus
+one-fifth per collected unit) without changing evaluation rewards or physical
+resource accounting. Apply the same M4 food/manure/safety development gate
+before inspecting a separate audit range; no automatic promotion. See
+[M16i's controlled study](M16I_MANURE_CREDIT.md). M16g KL rehearsal alone
+also did not improve held-out farming. Then finish M16 replication with
+independent partner policies and begin M17
 multi-seed ecological calibration before shipping a performance-focused M18
 release. The original M12 event-visibility foundation is already merged.
