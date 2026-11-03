@@ -144,6 +144,23 @@ def parser() -> argparse.ArgumentParser:
     staged.add_argument("--audit-episodes", type=int, default=48)
     staged.add_argument("--development-seed", type=int, default=1_600_000)
     staged.add_argument("--audit-seed", type=int, default=2_600_000)
+    sweep = sub.add_parser("sweep-farmers",
+                           help="M16f: compare safety weights and stage budgets before one audit")
+    sweep.add_argument("--baseline", type=Path, required=True)
+    sweep.add_argument("--output-dir", type=Path, required=True)
+    sweep.add_argument("--weights", type=float, nargs="+", default=[1.0, 3.0, 6.0])
+    sweep.add_argument("--stage-budgets", type=int, nargs="+", default=[1024, 4096])
+    sweep.add_argument("--training-seeds", type=int, nargs="+", default=[17, 37, 59])
+    sweep.add_argument("--worlds", type=int, default=4)
+    sweep.add_argument("--rollout", type=int, default=256)
+    sweep.add_argument("--epochs", type=int, default=4)
+    sweep.add_argument("--episode-cap", type=int)
+    sweep.add_argument("--development-episodes", type=int, default=48)
+    sweep.add_argument("--audit-episodes", type=int, default=48)
+    sweep.add_argument("--development-seed", type=int, default=1_600_000)
+    sweep.add_argument("--audit-seed", type=int, default=2_600_000)
+    sweep.add_argument("--dry-run", action="store_true",
+                       help="Estimate work without creating files or loading models")
     nomad_scenarios = ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
                        "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "nomad_convoy", "nomad_convoy_mixed")
     train_nomad = sub.add_parser("train-nomad", help="Train a nomad with cattle signals and defense")
@@ -531,6 +548,28 @@ def main(argv: list[str] | None = None) -> int:
             args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps({mode: {k: v for k, v in data.items() if k != "results"}
                           for mode, data in report.items()}, indent=2))
+        return 0
+    if args.command == "sweep-farmers":
+        from .learning.farmer_sweep import FarmerSweepOptions, run_farmer_sweep
+        options = FarmerSweepOptions(
+            survival_weights=tuple(args.weights),
+            stage_budgets=tuple(args.stage_budgets),
+            training_seeds=tuple(args.training_seeds),
+            worlds=args.worlds, rollout=args.rollout, epochs=args.epochs,
+            max_steps_override=args.episode_cap,
+            development_episodes=args.development_episodes,
+            audit_episodes=args.audit_episodes,
+            development_seed=args.development_seed, audit_seed=args.audit_seed)
+        if args.dry_run:
+            print(json.dumps(options.estimate(), indent=2))
+            return 0
+        report = run_farmer_sweep(args.baseline, args.output_dir, options)
+        print(json.dumps({"summary": str(args.output_dir / "summary.json"),
+                          "development_qualifiers": report["development_qualifiers"],
+                          "selected_before_audit": report["selected_before_audit"],
+                          "audit_passed": bool(report["audit"] and report["audit"]["passed"]),
+                          "eligible_for_manual_review": report["eligible_for_manual_review"]},
+                         indent=2))
         return 0
     if args.command == "train-farmer-staged":
         from .learning.farmer_staged import StagedFarmerOptions, train_farmer_staged

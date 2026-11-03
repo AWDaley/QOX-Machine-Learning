@@ -105,7 +105,7 @@ def _stage_seed(replica: int, stage: int, seed_id: int) -> int:
 
 
 def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
-                        options: StagedFarmerOptions) -> dict:
+                        options: StagedFarmerOptions, *, audit_enabled: bool = True) -> dict:
     """Train independent continuations and audit at most one selected candidate.
 
     Never mutates ``baseline``, any active QOX model set, or a visible world.
@@ -163,7 +163,7 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
             candidates.append((score, index, previous))
 
     audit = None
-    if candidates:
+    if candidates and audit_enabled:
         # Ties resolve by input seed order. Never search over audit results.
         _, selected_index, selected_path = max(candidates, key=lambda row: (row[0], -row[1]))
         comparison = compare_farmers(
@@ -182,12 +182,12 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
         "version": 1, "method": "staged_farmer_multi_seed",
         "baseline": str(baseline), "baseline_sha256": original_hash,
         "options": asdict(options), "stages": [name for name, _ in STAGES],
-        "replicas": replicas, "audit": audit,
+        "replicas": replicas, "audit": audit, "audit_deferred": not audit_enabled,
         "enough_training_seeds": len(options.training_seeds) >= 3,
         "eligible_for_manual_review": eligible,
         "recommended_checkpoint": audit["candidate"] if eligible else None,
         "notes": ("No model is automatically installed. Development comparisons select at "
-                  "most one candidate, evaluated once on separate audit seeds. "
+                  "most one candidate, evaluated once on separate audit seeds when enabled. "
                   "At least three distinct training seeds and 48 episodes per "
                   "comparison scenario are required for manual review. "
                   "A positive audit remains a research screening result, not proof "
