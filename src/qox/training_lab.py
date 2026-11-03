@@ -20,7 +20,8 @@ class TrainingCancelled(Exception):
 
 SCENARIOS: dict[Species, tuple[str, ...]] = {
     Species.COW: ("forage", "threat", "nomad_herd", "cow_signal"),
-    Species.FARMER: ("agriculture", "refuge", "manure", "farmer_mixed"),
+    Species.FARMER: ("agriculture", "refuge", "manure", "farmer_mixed",
+                     "farmstead", "farmstead_threat", "farmstead_mixed"),
     Species.NOMAD: ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed"),
     Species.SCAVENGER: ("scavenger_waste", "scavenger_carrion",
                         "scavenger_competition", "scavenger_mixed"),
@@ -49,6 +50,9 @@ METRICS: dict[Species, dict[str, tuple[str, str, str]]] = {
         "refuge": ("mean_final_health", "final_health", "Final health"),
         "manure": ("mean_fertilized", "fertilized", "Manure applied"),
         "farmer_mixed": ("mean_return", "return", "Episode reward (mixed)"),
+        "farmstead": ("mean_deposited", "deposited", "Food deposited (long farmstead)"),
+        "farmstead_threat": ("mean_final_health", "final_health", "Health under predator threat"),
+        "farmstead_mixed": ("mean_return", "return", "Episode reward (mixed farmstead)"),
     },
     Species.NOMAD: {
         "nomad_signal": ("mean_cows_in_pasture", "cows_in_pasture", "Call target arrivals"),
@@ -98,6 +102,8 @@ def scenario_steps(species: Species, scenario: str) -> int:
         return 8
     if scenario == "cow_signal":
         return 24
+    if scenario.startswith("farmstead"):
+        return 192
     return {Species.COW: 64, Species.FARMER: 96, Species.NOMAD: 96,
             Species.SCAVENGER: 48, Species.RAVAGER: 64}[species]
 

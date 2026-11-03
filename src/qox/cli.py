@@ -99,7 +99,7 @@ def parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--max-steps", type=int, default=96)
     benchmark.add_argument("--scenario", choices=("forage", "threat", "nomad_herd", "cow_signal"), default="forage")
     benchmark.add_argument("--report", type=Path)
-    farmer_scenarios = ("agriculture", "manure", "refuge", "farmer_mixed")
+    farmer_scenarios = ("agriculture", "manure", "refuge", "farmer_mixed", "farmstead", "farmstead_threat", "farmstead_mixed")
     train_farmer = sub.add_parser("train-farmer", help="Train farmer PPO with crop/manure/refuge curricula")
     train_farmer.add_argument("--steps", type=int, default=16384)
     train_farmer.add_argument("--seed", type=int, default=42)
@@ -117,6 +117,14 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--scenario", choices=farmer_scenarios, default="agriculture")
         cmd.add_argument("--mode", choices=("policy", "random", "scripted"), default="policy")
         cmd.add_argument("--report", type=Path)
+    farm_compare = sub.add_parser("compare-farmers",
+                                  help="M16d paired long-horizon agriculture/refuge screening")
+    farm_compare.add_argument("--baseline", type=Path, required=True)
+    farm_compare.add_argument("--candidate", type=Path, required=True)
+    farm_compare.add_argument("--episodes", type=int, default=48)
+    farm_compare.add_argument("--seed", type=int, default=1_600_000)
+    farm_compare.add_argument("--max-steps", type=int, default=192)
+    farm_compare.add_argument("--report", type=Path)
     nomad_scenarios = ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
                        "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "nomad_convoy", "nomad_convoy_mixed")
     train_nomad = sub.add_parser("train-nomad", help="Train a nomad with cattle signals and defense")
@@ -504,6 +512,16 @@ def main(argv: list[str] | None = None) -> int:
             args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps({mode: {k: v for k, v in data.items() if k != "results"}
                           for mode, data in report.items()}, indent=2))
+        return 0
+    if args.command == "compare-farmers":
+        from .learning.farmer_eval import compare_farmers
+        report = compare_farmers(args.baseline, args.candidate,
+                                 episodes=args.episodes, seed=args.seed,
+                                 max_steps=args.max_steps)
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps({k: v for k, v in report.items() if k != "cases"}, indent=2))
         return 0
     if args.command in ("train-farmer", "eval-farmer", "benchmark-farmer"):
         try:

@@ -84,3 +84,7 @@ jobs:
       - run: python -m pytest -q tests/test_m16c_convoy.py
       - run: qox train-herd --scenario nomad_convoy_mixed --partner-mode sample --phase nomad --cow-checkpoint runs/ci-cow-v2.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --cow-steps 96 --nomad-steps 96 --worlds 2 --rollout 96 --max-steps 16 --epochs 1 --output-dir runs/ci-m16c
       - run: qox compare-protectors --baseline-cow runs/ci-cow-v2.pt --baseline-nomad runs/ci-nomad-transfer.pt --candidate-cow runs/ci-cow-v2.pt --candidate-nomad runs/ci-m16c/nomad_round1.pt --episodes 2 --max-steps 16 --seed 1290000 --report runs/ci-m16c-protectors.json
+
+      - run: python -m pytest -q tests/test_m16d_farmer_planning.py
+      - run: qox train-farmer --scenario farmstead_mixed --steps 128 --worlds 2 --rollout 64 --max-steps 24 --output runs/ci-m16d-farmer.pt
+      - run: qox compare-farmers --baseline runs/ci-m16d-farmer.pt --candidate runs/ci-m16d-farmer.pt --episodes 2 --max-steps 18 --report runs/ci-m16d-compare.json
