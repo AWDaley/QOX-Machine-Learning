@@ -485,4 +485,8 @@ Remove `--dry-run` to train against the read-only M4 reference. The matched
 study uses 147,456 PPO decisions across three strengths and three seeds;
 its disjoint audit remains closed unless one candidate passes **all** of the
 original food, manure, survival, health and crop-damage gates. See
-[M16i design and experiment](docs/M16I_MANURE_CREDIT.md).
+[M16i design and experiment](docs/M16I_MANURE_CREDIT.md). In the completed
+M4-controlled study, stronger credit increased actual fertilizer use during
+training, but did not reliably transfer to held-out farms and reduced food
+production. **None of nine candidates qualified**; the audit was not opened
+and the installed model remains unchanged.

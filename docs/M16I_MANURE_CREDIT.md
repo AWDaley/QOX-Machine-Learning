@@ -1,8 +1,8 @@
 # M16i — Finite-manure training credit assignment
 
-**Status:** Implemented. The predeclared M4-baseline study below measures
-whether stronger *training-only* credit can recover physical manure use without
-degrading food storage, survival, health or crop damage. No automatic promotion.
+**Status:** Implemented and evaluated against the archived M4 baseline.
+**Zero of nine** development candidates passed the unchanged farming/safety
+gate. The blind audit was never opened; no policy was installed or promoted.
 
 ## Question and causal intervention
 
@@ -88,5 +88,70 @@ model set. For a quick nonqualifying smoke test, use `--stage-budgets 256
 
 ## First M4-baseline study
 
-*Results and reproducibility checks will be recorded here once the controlled
-run completes.*
+The study completed all **144 stage/segment trainings**, **147,456 PPO
+decisions** and **2,592 development world episodes** with the exact
+predeclared settings. The same original M4 baseline, SHA-256
+`5036afd395239049b5b99cef4aec7b99277c118eec705cb185fe3124a77938dd`,
+was read-only throughout. For the new safe development seed block, it
+averaged **3.6064 food deposited** and **2.2817 useful manure applied**.
+All nine candidates and their ablations used the same 48 safe and 48
+threatened development seeds.
+
+Candidate changes below are relative to that same M4 baseline. Threatened
+survival was 100% for all nine candidates and the baseline; threatened-health
+changes are in health units. The gate is the *full* original gate, not just
+food or manure.
+
+| Bonus | Seed | Safe food Δ | Safe manure Δ | Threat health Δ | Development gate |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 0 | 17 | −0.6311 | −2.2817 | +0.1042 | Rejected |
+| 0 | 37 | −0.6311 | −2.2817 | −2.2917 | Rejected |
+| 0 | 59 | −0.6311 | −2.2817 | +0.1042 | Rejected |
+| 0.3 | 17 | −0.6731 | **+0.9158** | −0.5000 | Rejected |
+| 0.3 | 37 | −1.6898 | −2.2817 | −0.6458 | Rejected |
+| 0.3 | 59 | −0.6731 | −1.1630 | +1.2500 | Rejected |
+| 1.0 | 17 | −1.6898 | −2.2817 | +0.7500 | Rejected |
+| 1.0 | 37 | −1.6898 | −2.2817 | −0.3958 | Rejected |
+| 1.0 | 59 | −1.4018 | −1.5972 | +0.7500 | Rejected |
+
+Across the three independently trained seeds in each arm:
+
+| Bonus | Mean safe food | Mean safe manure | Mean manure applied **during training** per seed |
+| ---: | ---: | ---: | ---: |
+| 0 | 2.9753 | 0.0000 | 139.5147 |
+| 0.3 | 2.5944 | 1.4387 | 216.8113 |
+| 1.0 | 2.0127 | 0.2282 | 258.6830 |
+
+These are descriptive three-network averages; the training totals aggregate
+all 16 segments, whereas the development metrics are per held-out episode.
+Larger reward strengths generated more real fertilizer events in training,
+but **did not transfer reliably** to novel farmsteads. Stronger shaping also
+coincided with lower held-out food deposits. These observations do not prove
+the mechanism of failure; they rule out the simplest hypothesis that just
+raising finite-manure event rewards fixes the M16h result.
+
+The seed-17 `0.3` candidate achieved the only positive safe manure gain:
+**+0.9158 units/episode**, with a paired 95% bootstrap interval of
+**[+0.1333, +1.7750]**. Its food-storage difference was **−0.6731**,
+with paired interval **[−1.0565, −0.3620]**. Another `0.3` seed still applied
+zero manure. This is exactly why single-seed success cannot determine
+model admission.
+
+### Reproducibility and decision
+
+- The 0-credit policy parameters from **all three** training seeds were
+  bit-identical to the corresponding archived M16h four-cycle control
+  tensors; their new checkpoint metadata and development seeds differ.
+- Verified baseline hash was unchanged before/after the sweep; 144 stage
+  checkpoints and all nine seed-level development reports were retained.
+- `development_qualifiers = 0`; `selected_before_audit = null`;
+  `audit = null`. The reserved 3.2M/3.3M audit cases were not evaluated,
+  and no recommendation or model-set promotion occurred.
+- The next justified investigation is **joint credit and retention**, e.g.
+  actor-verified task completion with constrained food-production
+  preservation, or a memory/action-context intervention. Keep the existing
+  holdout, safety and non-promotion rules; do not simply sweep more reward
+  strengths on the same development seed block.
+
+**Decision: 0/9 development qualifiers; independent audit remains closed;
+original M4 model retained.**
