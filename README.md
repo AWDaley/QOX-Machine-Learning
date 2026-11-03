@@ -329,3 +329,36 @@ pasture-arrival performance**. Neither candidate is promoted automatically.
 The ordinary ecosystem's rules and older checkpoint formats are unchanged.
 
 See [M16b defense methods and results](docs/M16B_NOMAD_DEFENSE.md).
+
+
+## M16c: convoy protection and conservative candidate screening
+
+M16c adds `nomad_convoy`, a **migration-plus-predator** scenario with a real
+pasture goal, three neural cows, one neural nomad, and a scripted ravager.
+The ravager starts from several directions with variable health/cover, and the
+scenario rotates among three **scripted** pursuit styles. `nomad_convoy_mixed`
+alternates that situation with predator-free migration during PPO training.
+The scenario changes initial conditions and opponent action choices, **not**
+world combat/locomotion rules. It never orders cows to obey calls. Existing
+checkpoint input/action schemas are unchanged.
+
+```powershell
+qox train-herd --scenario nomad_convoy_mixed --partner-mode sample --phase alternate `
+  --cow-checkpoint checkpoints/baseline_cow.pt --nomad-checkpoint checkpoints/baseline_nomad.pt `
+  --cow-steps 4096 --nomad-steps 3072 --worlds 2 --rollout 96 `
+  --max-steps 80 --seed 18302 --output-dir runs/m16c
+
+qox compare-protectors `
+  --baseline-cow checkpoints/baseline_cow.pt --baseline-nomad checkpoints/baseline_nomad.pt `
+  --candidate-cow runs/m16c/cow_round1.pt --candidate-nomad runs/m16c/nomad_round1.pt `
+  --episodes 48 --seed 1190000 --max-steps 64 --report runs/m16c/protector_test.json
+```
+
+The promotion gate checks convoy cattle survival and health, pasture arrivals,
+predator-free migration retention, call ablations and a no-attack counterfactual.
+**No checkpoint is changed automatically.** Initial experiments show a tradeoff:
+one joint policy improves cow health but reduces arrivals, while an anchored
+nomad policy improves isolated Guard/Intercept encounters but performs worse
+in the new convoy survival test. Both remain experimental.
+
+See [M16c evaluation methods](docs/M16C_GENERALIZABLE_PROTECTION.md).

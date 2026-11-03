@@ -81,3 +81,6 @@ jobs:
       - run: python -m pytest -q tests/test_m16b_defense.py
       - run: qox train-nomad --scenario nomad_guard_mixed --nomad-v2 --steps 128 --worlds 2 --rollout 64 --max-steps 16 --seed 777 --output runs/ci-m16b-nomad.pt
       - run: qox compare-defenders --baseline-nomad runs/ci-nomad-transfer.pt --candidate-nomad runs/ci-m16b-nomad.pt --cow-checkpoint runs/ci-cow-v2.pt --episodes 2 --max-steps 16 --seed 98000 --report runs/ci-m16b-defender.json
+      - run: python -m pytest -q tests/test_m16c_convoy.py
+      - run: qox train-herd --scenario nomad_convoy_mixed --partner-mode sample --phase nomad --cow-checkpoint runs/ci-cow-v2.pt --nomad-checkpoint runs/ci-nomad-transfer.pt --cow-steps 96 --nomad-steps 96 --worlds 2 --rollout 96 --max-steps 16 --epochs 1 --output-dir runs/ci-m16c
+      - run: qox compare-protectors --baseline-cow runs/ci-cow-v2.pt --baseline-nomad runs/ci-nomad-transfer.pt --candidate-cow runs/ci-cow-v2.pt --candidate-nomad runs/ci-m16c/nomad_round1.pt --episodes 2 --max-steps 16 --seed 1290000 --report runs/ci-m16c-protectors.json
