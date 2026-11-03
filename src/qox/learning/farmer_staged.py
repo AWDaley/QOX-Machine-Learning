@@ -32,6 +32,10 @@ class StagedFarmerOptions:
     audit_episodes: int = 48
     development_seed: int = 1_600_000
     audit_seed: int = 2_600_000
+    rehearsal_kl: float = 0.0
+    rehearsal_seed: int = 1_200_000
+    rehearsal_episodes: int = 4
+    rehearsal_max_steps: int = 96
 
     def __post_init__(self) -> None:
         seeds = self.training_seeds
@@ -48,6 +52,10 @@ class StagedFarmerOptions:
             raise ValueError("Rollout must be divisible by worlds")
         if not 1.0 <= self.survival_weight <= 20.0:
             raise ValueError("Survival weight must be between 1 and 20")
+        if not 0 <= self.rehearsal_kl <= 10.0:
+            raise ValueError("Rehearsal KL must be between 0 and 10")
+        if not 1 <= self.rehearsal_episodes < 100_000 or self.rehearsal_max_steps < 1:
+            raise ValueError("Rehearsal episodes and horizon must be positive")
         # Each comparison evaluates two blocks: safe seeds, then threat seeds
         # offset by 100,000. Keep both blocks separate and below training seeds.
         dev_end = self.development_seed + 100_000 + self.development_episodes
@@ -56,6 +64,11 @@ class StagedFarmerOptions:
                 dev_end > self.audit_seed or audit_end >= 1_000_000_000 or
                 self.development_episodes >= 100_000 or self.audit_episodes >= 100_000):
             raise ValueError("Development and audit seed ranges must be nonoverlapping")
+        if (self.rehearsal_kl and
+                (self.rehearsal_seed < 0 or
+                 self.rehearsal_seed + 200_000 + self.rehearsal_episodes >=
+                 self.development_seed)):
+            raise ValueError("Rehearsal seeds must precede held-out development seeds")
 
 
 def _sha(path: Path) -> str:
@@ -119,6 +132,14 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
     if output_dir.exists():
         raise FileExistsError(f"Experiment output already exists: {output_dir}")
     original_hash = _sha(baseline)
+    rehearsal = None
+    if options.rehearsal_kl:
+        from .farmer_rehearsal import collect_farmer_rehearsal
+        rehearsal = collect_farmer_rehearsal(
+            baseline, seed=options.rehearsal_seed, episodes=options.rehearsal_episodes,
+            max_steps=options.rehearsal_max_steps)
+        if rehearsal.metadata["baseline_sha256"] != original_hash:
+            raise RuntimeError("Farmer baseline changed during rehearsal collection")
     output_dir.mkdir(parents=True)
 
     replicas: list[dict] = []
@@ -135,13 +156,20 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                 worlds=options.worlds, rollout=options.rollout, epochs=options.epochs,
                 max_steps=options.max_steps_override or recommended_steps,
                 scenario=scenario, hidden=hidden,
-                survival_weight=options.survival_weight if stage_index >= 2 else 1.0)
-            result = train_farmer(stage_options, checkpoint, init_checkpoint=previous)
+                survival_weight=options.survival_weight if stage_index >= 2 else 1.0,
+                rehearsal_kl=options.rehearsal_kl)
+            if rehearsal is None:
+                result = train_farmer(stage_options, checkpoint, init_checkpoint=previous)
+            else:
+                result = train_farmer(stage_options, checkpoint, init_checkpoint=previous,
+                                      rehearsal=rehearsal)
             stage_records.append({
                 "scenario": scenario, "seed": stage_seed, "checkpoint": str(checkpoint),
                 "checkpoint_sha256": _sha(checkpoint),
                 "decisions": result["farmer_steps"],
                 "survival_weight": stage_options.survival_weight,
+                "rehearsal_kl": stage_options.rehearsal_kl,
+                "final_rehearsal_kl": result.get("final_rehearsal_kl", 0.0),
                 "completed_episodes": result["completed_episodes"],
             })
             previous = checkpoint
@@ -182,6 +210,7 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
         "version": 1, "method": "staged_farmer_multi_seed",
         "baseline": str(baseline), "baseline_sha256": original_hash,
         "options": asdict(options), "stages": [name for name, _ in STAGES],
+        "rehearsal": rehearsal.metadata if rehearsal is not None else None,
         "replicas": replicas, "audit": audit, "audit_deferred": not audit_enabled,
         "enough_training_seeds": len(options.training_seeds) >= 3,
         "eligible_for_manual_review": eligible,

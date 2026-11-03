@@ -144,12 +144,19 @@ def parser() -> argparse.ArgumentParser:
     staged.add_argument("--audit-episodes", type=int, default=48)
     staged.add_argument("--development-seed", type=int, default=1_600_000)
     staged.add_argument("--audit-seed", type=int, default=2_600_000)
+    staged.add_argument("--rehearsal-kl", type=float, default=0.0,
+                        help="M16g: masked KL toward frozen M4 farming demonstrations")
+    staged.add_argument("--rehearsal-seed", type=int, default=1_200_000)
+    staged.add_argument("--rehearsal-episodes", type=int, default=4)
+    staged.add_argument("--rehearsal-max-steps", type=int, default=96)
     sweep = sub.add_parser("sweep-farmers",
                            help="M16f: compare safety weights and stage budgets before one audit")
     sweep.add_argument("--baseline", type=Path, required=True)
     sweep.add_argument("--output-dir", type=Path, required=True)
     sweep.add_argument("--weights", type=float, nargs="+", default=[1.0, 3.0, 6.0])
     sweep.add_argument("--stage-budgets", type=int, nargs="+", default=[1024, 4096])
+    sweep.add_argument("--rehearsal-kls", type=float, nargs="+", default=[0.0],
+                       help="M16g: compare frozen-M4 farming replay strengths; 0 is control")
     sweep.add_argument("--training-seeds", type=int, nargs="+", default=[17, 37, 59])
     sweep.add_argument("--worlds", type=int, default=4)
     sweep.add_argument("--rollout", type=int, default=256)
@@ -159,6 +166,9 @@ def parser() -> argparse.ArgumentParser:
     sweep.add_argument("--audit-episodes", type=int, default=48)
     sweep.add_argument("--development-seed", type=int, default=1_600_000)
     sweep.add_argument("--audit-seed", type=int, default=2_600_000)
+    sweep.add_argument("--rehearsal-seed", type=int, default=1_200_000)
+    sweep.add_argument("--rehearsal-episodes", type=int, default=4)
+    sweep.add_argument("--rehearsal-max-steps", type=int, default=96)
     sweep.add_argument("--dry-run", action="store_true",
                        help="Estimate work without creating files or loading models")
     nomad_scenarios = ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
@@ -554,12 +564,16 @@ def main(argv: list[str] | None = None) -> int:
         options = FarmerSweepOptions(
             survival_weights=tuple(args.weights),
             stage_budgets=tuple(args.stage_budgets),
+            rehearsal_kls=tuple(args.rehearsal_kls),
             training_seeds=tuple(args.training_seeds),
             worlds=args.worlds, rollout=args.rollout, epochs=args.epochs,
             max_steps_override=args.episode_cap,
             development_episodes=args.development_episodes,
             audit_episodes=args.audit_episodes,
-            development_seed=args.development_seed, audit_seed=args.audit_seed)
+            development_seed=args.development_seed, audit_seed=args.audit_seed,
+            rehearsal_seed=args.rehearsal_seed,
+            rehearsal_episodes=args.rehearsal_episodes,
+            rehearsal_max_steps=args.rehearsal_max_steps)
         if args.dry_run:
             print(json.dumps(options.estimate(), indent=2))
             return 0
@@ -580,7 +594,11 @@ def main(argv: list[str] | None = None) -> int:
             max_steps_override=args.episode_cap,
             development_episodes=args.development_episodes,
             audit_episodes=args.audit_episodes,
-            development_seed=args.development_seed, audit_seed=args.audit_seed)
+            development_seed=args.development_seed, audit_seed=args.audit_seed,
+            rehearsal_kl=args.rehearsal_kl,
+            rehearsal_seed=args.rehearsal_seed,
+            rehearsal_episodes=args.rehearsal_episodes,
+            rehearsal_max_steps=args.rehearsal_max_steps)
         report = train_farmer_staged(args.baseline, args.output_dir, options)
         print(json.dumps({"summary": str(args.output_dir / "summary.json"),
                           "training_seeds": args.training_seeds,

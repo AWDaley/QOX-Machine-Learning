@@ -417,3 +417,26 @@ Only the selected development qualifier receives an audit plus scripted and
 random reference comparisons. All candidate checkpoints stay separate and
 unpromoted. The M4 baseline is a **user-provided checkpoint**, not included
 in the Git repository. See [M16f methods and findings](docs/M16F_FARMER_SWEEP.md).
+
+## M16g — Farmer skill-preserving rehearsal
+
+The farmer PPO trainer can now keep a frozen copy of the M4 farmer as a
+teacher. Before training, it collects local observations and legal-action
+probabilities on separate agriculture, manure and farmstead training worlds.
+During later PPO stages, an optional masked teacher-to-student KL term
+rehearses those behaviors, with additional sampling of rare planting,
+harvesting, depositing and fertilizing actions. This does not copy actions
+into the live world or change the environment's reward or physics.
+
+Compare an unmodified PPO control with two rehearsal strengths using the
+same baseline, training seeds and disjoint held-out evaluation worlds:
+
+```powershell
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16g_001 --weights 3 --stage-budgets 1024 --epochs 2 --rehearsal-kls 0 1 5 --training-seeds 17 37 59 --development-seed 1800000 --audit-seed 2800000 --dry-run
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16g_001 --weights 3 --stage-budgets 1024 --epochs 2 --rehearsal-kls 0 1 5 --training-seeds 17 37 59 --development-episodes 48 --audit-episodes 48 --development-seed 1800000 --audit-seed 2800000
+```
+
+Only a development-qualified candidate may enter the one-time audit, and
+no weights are installed automatically. The experiment records teacher
+sample hashes, action counts and per-stage KL alongside the usual paired
+world comparisons. See [M16g methods and findings](docs/M16G_FARMER_REHEARSAL.md).

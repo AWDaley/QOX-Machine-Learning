@@ -10,17 +10,22 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import random
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 from torch import nn
 from torch.distributions import Categorical
+from torch.distributions.kl import kl_divergence
 
 from ..actions import Kind
 from ..agents import scripted_actions
 from ..entities import Species
 from ..envs.core import QoxCoreEnv
 from ..perception import ACTIONS, FARMER_OBSERVATION_VERSION, features_for, observation_size
+
+if TYPE_CHECKING:
+    from .farmer_rehearsal import FarmerRehearsalData
 
 FARMER_SCENARIOS = (
     "agriculture", "refuge", "manure", "farmer_mixed",
@@ -64,6 +69,7 @@ class FarmerTrainOptions:
     entropy: float = 0.015
     hidden: int = 64
     survival_weight: float = 1.0
+    rehearsal_kl: float = 0.0
 
     def __post_init__(self) -> None:
         if self.scenario not in FARMER_SCENARIOS:
@@ -79,6 +85,8 @@ class FarmerTrainOptions:
             raise ValueError("Invalid PPO hyperparameters")
         if not 1.0 <= self.survival_weight <= 20.0:
             raise ValueError("Farmer survival weight must be between 1 and 20")
+        if not 0.0 <= self.rehearsal_kl <= 10.0:
+            raise ValueError("Farmer rehearsal KL weight must be between 0 and 10")
 
 
 def _fresh_env(scenario: str, max_steps: int) -> QoxCoreEnv:
@@ -101,12 +109,36 @@ def _safety_adjusted_reward(reward: float, components: dict[str, float],
 
 def train_farmer(options: FarmerTrainOptions, output: str | Path,
                  init_checkpoint: str | Path | None = None, *,
+                 rehearsal: FarmerRehearsalData | None = None,
                  progress_callback=None, cancel_requested=None) -> dict:
     """Perform PPO updates for at least the requested number of farmer actions."""
+    if options.rehearsal_kl and rehearsal is None:
+        raise ValueError("Rehearsal KL requires frozen teacher demonstrations")
+    if options.rehearsal_kl and rehearsal is not None:
+        n_examples = rehearsal.observations.shape[0]
+        count = len(ACTIONS[Species.FARMER])
+        if (n_examples < 1 or rehearsal.observations.shape !=
+                (n_examples, observation_size(Species.FARMER)) or
+                rehearsal.masks.shape != (n_examples, count) or
+                rehearsal.teacher_probs.shape != (n_examples, count) or
+                rehearsal.sampling_weights.shape != (n_examples,) or
+                not torch.isfinite(rehearsal.observations).all() or
+                not torch.isfinite(rehearsal.masks).all() or
+                not torch.isfinite(rehearsal.teacher_probs).all() or
+                not torch.isfinite(rehearsal.sampling_weights).all() or
+                torch.any(rehearsal.sampling_weights <= 0) or
+                not torch.allclose(rehearsal.teacher_probs.sum(dim=1),
+                                   torch.ones(n_examples), atol=1e-5) or
+                torch.any(rehearsal.teacher_probs < 0) or
+                torch.any(rehearsal.teacher_probs[rehearsal.masks == 0] > 1e-6)):
+            raise ValueError("Invalid frozen farmer rehearsal observations or probabilities")
     torch.set_num_threads(1)
     torch.manual_seed(options.seed)
     np.random.seed(options.seed)
     random.seed(options.seed)
+    # Replay examples have their own RNG so the control and KL-regularized
+    # candidates sample identical on-policy actions until their weights diverge.
+    replay_rng = torch.Generator().manual_seed(options.seed + 8_000_000_000)
     model = (load_farmer(init_checkpoint) if init_checkpoint is not None else
              FarmerPolicy(options.hidden))
     if model.encoder[0].out_features != options.hidden:
@@ -200,6 +232,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
         n = xs.shape[0]
         last_loss = 0.0
+        last_rehearsal_kl = 0.0
         for _ in range(options.epochs):
             for batch in torch.randperm(n).split(options.minibatch):
                 distribution, predicted = model(xs[batch], ms[batch])
@@ -208,6 +241,16 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                 loss = (-torch.minimum(ratio * adv[batch], clipped * adv[batch]).mean()
                         + 0.5 * (target_returns[batch] - predicted).square().mean()
                         - options.entropy * distribution.entropy().mean())
+                if options.rehearsal_kl and rehearsal is not None:
+                    replay_indices = torch.multinomial(
+                        rehearsal.sampling_weights, len(batch), replacement=True,
+                        generator=replay_rng)
+                    student, _ = model(rehearsal.observations[replay_indices],
+                                       rehearsal.masks[replay_indices])
+                    teacher = Categorical(probs=rehearsal.teacher_probs[replay_indices])
+                    replay_kl = kl_divergence(teacher, student).mean()
+                    loss = loss + options.rehearsal_kl * replay_kl
+                    last_rehearsal_kl = float(replay_kl.detach())
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -216,6 +259,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         steps += n
         history.append({"farmer_steps": steps, "completed_episodes": len(completed_returns),
                         "loss": round(last_loss, 5),
+                        "rehearsal_kl": round(last_rehearsal_kl, 6),
                         "mean_recent_return": round(float(np.mean(completed_returns[-30:])), 4)
                         if completed_returns else None})
         if progress_callback is not None:
@@ -236,6 +280,8 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                 "completed_steps": steps}, output)
     report = {"checkpoint": str(output), "farmer_steps": steps,
               "completed_episodes": len(completed_returns),
+              "final_rehearsal_kl": round(last_rehearsal_kl, 6),
+              "rehearsal": rehearsal.metadata if options.rehearsal_kl and rehearsal else None,
               "recent_returns": completed_returns[-30:], "history": history}
     output.with_suffix(".metrics.json").write_text(json.dumps(report, indent=2),
                                                      encoding="utf-8")
