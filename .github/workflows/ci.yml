@@ -88,3 +88,5 @@ jobs:
       - run: python -m pytest -q tests/test_m16d_farmer_planning.py
       - run: qox train-farmer --scenario farmstead_mixed --steps 128 --worlds 2 --rollout 64 --max-steps 24 --output runs/ci-m16d-farmer.pt
       - run: qox compare-farmers --baseline runs/ci-m16d-farmer.pt --candidate runs/ci-m16d-farmer.pt --episodes 2 --max-steps 18 --report runs/ci-m16d-compare.json
+      - run: python -m pytest -q tests/test_m16e_staged_farmer.py
+      - run: qox train-farmer-staged --baseline runs/ci-farmer.pt --output-dir runs/ci-m16e --training-seeds 17 --stage-steps 64 --worlds 2 --rollout 64 --epochs 1 --episode-cap 18 --development-episodes 2 --audit-episodes 2

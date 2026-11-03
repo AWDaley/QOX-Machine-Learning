@@ -63,6 +63,7 @@ class FarmerTrainOptions:
     clip: float = 0.2
     entropy: float = 0.015
     hidden: int = 64
+    survival_weight: float = 1.0
 
     def __post_init__(self) -> None:
         if self.scenario not in FARMER_SCENARIOS:
@@ -76,6 +77,8 @@ class FarmerTrainOptions:
         if not (0 < self.lr and 0 < self.gamma <= 1 and 0 <= self.gae_lambda <= 1
                 and 0 < self.clip < 1 and self.entropy >= 0):
             raise ValueError("Invalid PPO hyperparameters")
+        if not 1.0 <= self.survival_weight <= 20.0:
+            raise ValueError("Farmer survival weight must be between 1 and 20")
 
 
 def _fresh_env(scenario: str, max_steps: int) -> QoxCoreEnv:
@@ -84,6 +87,16 @@ def _fresh_env(scenario: str, max_steps: int) -> QoxCoreEnv:
 
 def _first_farmer(env: QoxCoreEnv) -> str:
     return next(name for name in env.possible_agents if name.startswith("farmer_"))
+
+
+def _safety_adjusted_reward(reward: float, components: dict[str, float],
+                            weight: float) -> float:
+    """Training-only scaling of verified injury/death penalties.
+
+    No change to the world's physical outcomes or reported evaluation reward.
+    """
+    return reward + (weight - 1.0) * (components.get("injury", 0.0) +
+                                     components.get("death", 0.0))
 
 
 def train_farmer(options: FarmerTrainOptions, output: str | Path,
@@ -135,9 +148,11 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                 old_logp = distribution.log_prob(chosen)
             step_rewards, step_dones = [], []
             for i, env in enumerate(envs):
-                next_obs, earned, terminated, truncated, _ = env.step({
+                next_obs, earned, terminated, truncated, infos = env.step({
                     names[i]: int(chosen[i].item())})
-                reward = float(earned[names[i]])
+                reward = _safety_adjusted_reward(
+                    float(earned[names[i]]),
+                    infos[names[i]]["reward_components"], options.survival_weight)
                 done = bool(terminated[names[i]] or truncated[names[i]])
                 active_returns[i] += reward
                 step_rewards.append(reward)

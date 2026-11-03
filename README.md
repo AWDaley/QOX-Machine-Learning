@@ -379,3 +379,23 @@ qox compare-farmers --baseline runs/baseline_farmer.pt --candidate runs/m16d_can
 The exploratory farmer policy deposited more food but lost survival and
 manure effectiveness under predators, so it is **not promoted**. See
 [the M16d research report](docs/M16D_FARMER_PLANNING.md).
+
+## M16e — Staged farmer learning and survival-first audit
+
+`train-farmer-staged` runs agriculture → manure → refuge → mixed farmstead
+training for three independent training seeds by default. Only the refuge and
+mixed farmstead PPO stages amplify **actual injury/death penalties** (default
+3×); evaluation and world physics remain unchanged. Every candidate is
+compared to the original frozen farmer checkpoint on matched development
+worlds. At most one development winner gets an independent-seed audit.
+
+```powershell
+qox train-farmer-staged --baseline runs/baseline_farmer.pt --output-dir runs/m16e_experiment --training-seeds 17 37 59 --stage-steps 4096 --development-episodes 48 --audit-episodes 48
+```
+
+Each experiment produces separate per-stage checkpoints, development reports,
+an optional audit report, and `summary.json`. Failed candidates remain saved
+for diagnosis; **no checkpoint is ever installed automatically**. The output
+directory must be new so existing experiments cannot be overwritten. See
+[the M16e guide](docs/M16E_STAGED_FARMER.md) for the evaluation gate and
+low-cost smoke settings.
