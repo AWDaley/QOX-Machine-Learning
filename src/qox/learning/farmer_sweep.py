@@ -20,6 +20,7 @@ from .farmer_staged import (STAGES, StagedFarmerOptions, _gate,
 class FarmerSweepOptions:
     survival_weights: tuple[float, ...] = (1.0, 3.0, 6.0)
     stage_budgets: tuple[int, ...] = (1024, 4096)
+    rehearsal_kls: tuple[float, ...] = (0.0,)
     training_seeds: tuple[int, ...] = (17, 37, 59)
     worlds: int = 4
     rollout: int = 256
@@ -29,48 +30,64 @@ class FarmerSweepOptions:
     audit_episodes: int = 48
     development_seed: int = 1_600_000
     audit_seed: int = 2_600_000
+    rehearsal_seed: int = 1_200_000
+    rehearsal_episodes: int = 4
+    rehearsal_max_steps: int = 96
 
     def __post_init__(self) -> None:
-        if (not self.survival_weights or not self.stage_budgets or
+        if (not self.survival_weights or not self.stage_budgets or not self.rehearsal_kls or
                 len(set(self.survival_weights)) != len(self.survival_weights) or
-                len(set(self.stage_budgets)) != len(self.stage_budgets)):
-            raise ValueError("Sweep weights and budgets must be nonempty and distinct")
-        if len(self.survival_weights) * len(self.stage_budgets) > 12:
+                len(set(self.stage_budgets)) != len(self.stage_budgets) or
+                len(set(self.rehearsal_kls)) != len(self.rehearsal_kls)):
+            raise ValueError("Sweep weights, budgets and KL values must be distinct")
+        configs = len(self.survival_weights) * len(self.stage_budgets) * len(self.rehearsal_kls)
+        if configs > 12:
             raise ValueError("Maximum twelve sweep configurations per experiment")
         for weight in self.survival_weights:
             for budget in self.stage_budgets:
-                self.stage_options(weight, budget)
+                for kl in self.rehearsal_kls:
+                    self.stage_options(weight, budget, kl)
 
-    def stage_options(self, weight: float, budget: int) -> StagedFarmerOptions:
+    def stage_options(self, weight: float, budget: int,
+                      rehearsal_kl: float = 0.0) -> StagedFarmerOptions:
         return StagedFarmerOptions(
             training_seeds=self.training_seeds, steps_per_stage=budget,
             worlds=self.worlds, rollout=self.rollout, epochs=self.epochs,
             survival_weight=weight, max_steps_override=self.max_steps_override,
             development_episodes=self.development_episodes,
             audit_episodes=self.audit_episodes,
-            development_seed=self.development_seed, audit_seed=self.audit_seed)
+            development_seed=self.development_seed, audit_seed=self.audit_seed,
+            rehearsal_kl=rehearsal_kl, rehearsal_seed=self.rehearsal_seed,
+            rehearsal_episodes=self.rehearsal_episodes,
+            rehearsal_max_steps=self.rehearsal_max_steps)
 
     def estimate(self) -> dict:
         # The PPO trainer finishes the full last rollout of each stage.
         decisions = (len(self.training_seeds) * len(STAGES) *
-                     len(self.survival_weights) *
+                     len(self.survival_weights) * len(self.rehearsal_kls) *
                      sum(((budget + self.rollout - 1) // self.rollout) * self.rollout
                          for budget in self.stage_budgets))
-        configs = len(self.survival_weights) * len(self.stage_budgets)
+        configs = len(self.survival_weights) * len(self.stage_budgets) * len(self.rehearsal_kls)
         return {
             "configurations": configs,
             "training_runs": configs * len(self.training_seeds) * len(STAGES),
             "approximate_ppo_decisions": decisions,
             "development_world_episodes": (configs * len(self.training_seeds) *
                                             len(SCENARIOS) * 3 * self.development_episodes),
+            "rehearsal_world_episodes": (len(self.survival_weights) *
+                                         len(self.stage_budgets) *
+                                         sum(kl > 0 for kl in self.rehearsal_kls) *
+                                         3 * self.rehearsal_episodes),
             "audit_world_episodes_if_selected": (len(SCENARIOS) *
                                                  5 * self.audit_episodes),
             "audit_is_single_use": True,
         }
 
 
-def _slug(weight: float, budget: int) -> str:
-    return f"safety_{weight:.17g}".replace(".", "p") + f"_steps_{budget}"
+def _slug(weight: float, budget: int, rehearsal_kl: float = 0.0) -> str:
+    base = f"safety_{weight:.17g}".replace(".", "p") + f"_steps_{budget}"
+    return (base + f"_kl_{rehearsal_kl:.17g}".replace(".", "p")
+            if rehearsal_kl else base)
 
 
 def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
@@ -93,24 +110,27 @@ def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
     eligible: list[tuple[float, int, int, Path]] = []
     for weight in options.survival_weights:
         for budget in options.stage_budgets:
-            location = output_dir / _slug(weight, budget)
-            result = train_farmer_staged(
-                baseline, location, options.stage_options(weight, budget),
-                audit_enabled=False)
-            config_index = len(configs)
-            entries = []
-            for index, replica in enumerate(result["replicas"]):
-                entries.append({"training_seed": replica["training_seed"],
-                                "candidate": replica["candidate"],
-                                "food_gain": replica["food_gain"],
-                                "development_passed": replica["development_passed"],
-                                "development_checks": replica["development_checks"],
-                                "report": replica["development_report"]})
-                if replica["development_passed"] and len(options.training_seeds) >= 3:
-                    eligible.append((replica["food_gain"], config_index, index,
-                                     Path(replica["candidate"])))
-            configs.append({"survival_weight": weight, "stage_budget": budget,
-                            "location": str(location), "replicas": entries})
+            for rehearsal_kl in options.rehearsal_kls:
+                location = output_dir / _slug(weight, budget, rehearsal_kl)
+                result = train_farmer_staged(
+                    baseline, location, options.stage_options(weight, budget, rehearsal_kl),
+                    audit_enabled=False)
+                config_index = len(configs)
+                entries = []
+                for index, replica in enumerate(result["replicas"]):
+                    entries.append({"training_seed": replica["training_seed"],
+                                    "candidate": replica["candidate"],
+                                    "food_gain": replica["food_gain"],
+                                    "development_passed": replica["development_passed"],
+                                    "development_checks": replica["development_checks"],
+                                    "report": replica["development_report"]})
+                    if replica["development_passed"] and len(options.training_seeds) >= 3:
+                        eligible.append((replica["food_gain"], config_index, index,
+                                         Path(replica["candidate"])))
+                configs.append({"survival_weight": weight, "stage_budget": budget,
+                                "rehearsal_kl": rehearsal_kl,
+                                "rehearsal": result.get("rehearsal"),
+                                "location": str(location), "replicas": entries})
 
     chosen = None
     audit = None
@@ -121,6 +141,7 @@ def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
         config = configs[config_index]
         chosen = {"survival_weight": config["survival_weight"],
                   "stage_budget": config["stage_budget"],
+                  "rehearsal_kl": config["rehearsal_kl"],
                   "training_seed": config["replicas"][replica_index]["training_seed"],
                   "candidate": str(candidate), "development_food_gain": score}
 
@@ -150,14 +171,16 @@ def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
         raise RuntimeError("Farmer baseline checkpoint changed during the sweep")
     approved = bool(audit and audit["passed"])
     report = {
-        "version": 1, "method": "farmer_safety_budget_sweep",
+        "version": 2, "method": "farmer_safety_budget_rehearsal_sweep",
         "baseline": str(baseline), "baseline_sha256": original_hash,
         "options": asdict(options), "cost_estimate": options.estimate(),
         "configurations": configs, "development_qualifiers": len(eligible),
         "selected_before_audit": chosen, "audit": audit,
         "eligible_for_manual_review": approved,
         "recommended_checkpoint": chosen["candidate"] if approved else None,
-        "notes": ("Development comparisons are shared across all settings. "
+        "notes": ("Development comparisons are shared across all settings, including "
+                  "the no-rehearsal control. Teacher rehearsal uses disjoint training "
+                  "seeds and never draws on evaluation cases. "
                   "Only one development winner may use audit seeds. "
                   "Scripted and random reference policies are descriptive "
                   "and cannot influence selection. At least 3 training seeds "
