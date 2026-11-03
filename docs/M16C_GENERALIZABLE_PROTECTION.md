@@ -44,7 +44,7 @@ The convoys expose a policy tradeoff, not a software defect. Proposed next inves
 
 ## Acceptance and regression safeguards
 
-1. New scenario worlds keep the correct finite actors/resources, distinct IDs, deterministic seeds and reproducible replay.
+1. New scenario worlds keep finite actors/resources, distinct IDs and deterministic seeded action-stream outcomes. The generic `qox replay` format does not serialize specialized scenario fixtures, so use the seeded environment or a full M15 world save for scenario continuation.
 2. Predator behavior is selected from locally observed world state; no omniscient target or teleportation.
 3. No-call/no-attack evaluations use matched starting seeds and identical frozen networks.
 4. Legacy observation sizes, action schemas and checkpoint files remain valid.
