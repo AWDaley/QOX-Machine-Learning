@@ -52,7 +52,8 @@ def compare_protectors(baseline_cow: str | Path, baseline_nomad: str | Path,
     for index, scenario in enumerate(SCENARIOS):
         start = seed + 100_000 * index
 
-        def evaluate(nomad: str, cow: str, mode: str):
+        def evaluate(nomad: str, cow: str, mode: str,
+                     scenario: str = scenario, start: int = start):
             return evaluate_nomad(paths[nomad], cow_checkpoint=paths[cow],
                                   scenario=scenario, mode=mode, episodes=episodes,
                                   max_steps=max_steps, seed=start)
