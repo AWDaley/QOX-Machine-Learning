@@ -1,6 +1,7 @@
 # QOX — Recommended Improvement Roadmap (M12–M18)
 
-**Status:** Proposal, not implemented.  
+**Status:** M12–M15 merged; M16 research in progress through M16e, with no
+unqualified experimental models promoted. M17–M18 remain planned.
 **Repository:** https://github.com/AWDaley/QOX-Machine-Learning  
 **Baseline:** M11 resizable pixel-art viewer, M10 desktop launcher, M0–M9 simulation and neural-network systems.  
 **Objective:** Make QOX a readable, reproducible artificial-life laboratory that can demonstrate and measure genuine neural-network learning.
@@ -166,4 +167,7 @@ All PRs should include small acceptance tests, no accidental feature/action shap
 
 A user can launch QOX, recognize exactly what the actors are doing, inspect what each network perceived and chose, follow events and population charts, train and compare candidate models, save both models and world separately, replay a failure, and run reproducible long-term stability studies across different seeds.
 
-**Recommended immediate implementation: M12.** Meaningful visual feedback is the fastest improvement to the experience and supplies the event presentation foundation for the later diagnostics, training and ecology work.
+**Current recommended follow-up:** Finish M16 learned-behavior replication
+with stronger farmer survival and independent partner policies. Then begin M17
+multi-seed ecological calibration before shipping a performance-focused M18
+release. The original M12 event-visibility foundation is already merged.

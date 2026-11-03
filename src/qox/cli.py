@@ -106,6 +106,8 @@ def parser() -> argparse.ArgumentParser:
     train_farmer.add_argument("--worlds", type=int, default=4)
     train_farmer.add_argument("--rollout", type=int, default=512)
     train_farmer.add_argument("--max-steps", type=int, default=96)
+    train_farmer.add_argument("--survival-weight", type=float, default=1.0,
+                              help="Scale verified injury/death penalties in PPO only")
     train_farmer.add_argument("--scenario", choices=farmer_scenarios, default="farmer_mixed")
     train_farmer.add_argument("--output", type=Path, default=Path("runs/farmer.pt"))
     for title in ("eval-farmer", "benchmark-farmer"):
@@ -125,6 +127,23 @@ def parser() -> argparse.ArgumentParser:
     farm_compare.add_argument("--seed", type=int, default=1_600_000)
     farm_compare.add_argument("--max-steps", type=int, default=192)
     farm_compare.add_argument("--report", type=Path)
+    staged = sub.add_parser("train-farmer-staged",
+                            help="M16e: multi-seed farmer curriculum and survival-first audit")
+    staged.add_argument("--baseline", type=Path, required=True)
+    staged.add_argument("--output-dir", type=Path, required=True)
+    staged.add_argument("--training-seeds", type=int, nargs="+", default=[17, 37, 59])
+    staged.add_argument("--stage-steps", type=int, default=4096)
+    staged.add_argument("--worlds", type=int, default=4)
+    staged.add_argument("--rollout", type=int, default=256)
+    staged.add_argument("--epochs", type=int, default=4)
+    staged.add_argument("--survival-weight", type=float, default=3.0,
+                        help="Safety penalty multiplier for refuge/farmstead stages")
+    staged.add_argument("--episode-cap", type=int,
+                        help="Override every stage horizon and evaluation horizon")
+    staged.add_argument("--development-episodes", type=int, default=48)
+    staged.add_argument("--audit-episodes", type=int, default=48)
+    staged.add_argument("--development-seed", type=int, default=1_600_000)
+    staged.add_argument("--audit-seed", type=int, default=2_600_000)
     nomad_scenarios = ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
                        "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "nomad_convoy", "nomad_convoy_mixed")
     train_nomad = sub.add_parser("train-nomad", help="Train a nomad with cattle signals and defense")
@@ -513,6 +532,25 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({mode: {k: v for k, v in data.items() if k != "results"}
                           for mode, data in report.items()}, indent=2))
         return 0
+    if args.command == "train-farmer-staged":
+        from .learning.farmer_staged import StagedFarmerOptions, train_farmer_staged
+        options = StagedFarmerOptions(
+            training_seeds=tuple(args.training_seeds), steps_per_stage=args.stage_steps,
+            worlds=args.worlds, rollout=args.rollout, epochs=args.epochs,
+            survival_weight=args.survival_weight,
+            max_steps_override=args.episode_cap,
+            development_episodes=args.development_episodes,
+            audit_episodes=args.audit_episodes,
+            development_seed=args.development_seed, audit_seed=args.audit_seed)
+        report = train_farmer_staged(args.baseline, args.output_dir, options)
+        print(json.dumps({"summary": str(args.output_dir / "summary.json"),
+                          "training_seeds": args.training_seeds,
+                          "development_passed": sum(r["development_passed"]
+                                                    for r in report["replicas"]),
+                          "audit_passed": bool(report["audit"] and report["audit"]["passed"]),
+                          "eligible_for_manual_review": report["eligible_for_manual_review"]},
+                         indent=2))
+        return 0
     if args.command == "compare-farmers":
         from .learning.farmer_eval import compare_farmers
         report = compare_farmers(args.baseline, args.candidate,
@@ -533,7 +571,7 @@ def main(argv: list[str] | None = None) -> int:
             report = train_farmer(FarmerTrainOptions(
                 steps=args.steps, seed=args.seed, worlds=args.worlds,
                 rollout=args.rollout, max_steps=args.max_steps,
-                scenario=args.scenario), args.output)
+                scenario=args.scenario, survival_weight=args.survival_weight), args.output)
             print(json.dumps({k: v for k, v in report.items()
                               if k not in ("history", "recent_returns")}, indent=2))
             return 0
