@@ -67,7 +67,7 @@ class NomadTrainOptions:
 
     def __post_init__(self):
         if self.scenario not in ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
-                                 "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed"):
+                                 "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "nomad_convoy", "nomad_convoy_mixed"):
             raise ValueError("Unknown nomad training scenario")
         if min(self.steps, self.max_steps, self.worlds, self.rollout,
                self.epochs, self.minibatch, self.hidden) <= 0:
@@ -276,7 +276,7 @@ def evaluate_nomad(checkpoint: str | Path | None = None, *, episodes: int = 12,
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes and max_steps must be positive")
     if scenario not in ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
-                                 "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed"):
+                                 "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "nomad_convoy", "nomad_convoy_mixed"):
         raise ValueError("Unknown evaluation scenario")
     modes = ("policy", "policy_greedy", "policy_nocalls", "policy_greedy_nocalls",
              "policy_greedy_flipped", "policy_greedy_noattack",
