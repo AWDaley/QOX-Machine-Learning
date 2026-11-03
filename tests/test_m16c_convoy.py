@@ -41,6 +41,21 @@ def test_convoy_variations_are_physical_and_locally_observable():
     assert predators == {0, 1, 2}
 
 
+def test_convoy_seed_and_scripted_actions_reproduce_identical_world_hashes():
+    for seed in (17, 29, 46):
+        first = QoxCoreEnv(scenario="nomad_convoy", scripted_others=True,
+                           nomad_v2=True, cow_calls=True, max_steps=32)
+        second = QoxCoreEnv(scenario="nomad_convoy", scripted_others=True,
+                            nomad_v2=True, cow_calls=True, max_steps=32)
+        first.reset(seed=seed)
+        second.reset(seed=seed)
+        for _ in range(20):
+            assert first.world.state_hash() == second.world.state_hash()
+            first.step({})
+            second.step({})
+        assert first.world.state_hash() == second.world.state_hash()
+
+
 def test_mixed_convoy_alternates_a_real_predator_and_safe_migration():
     seen = {"safe": 0, "threat": 0}
     for seed in range(32):
