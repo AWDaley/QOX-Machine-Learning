@@ -317,3 +317,15 @@ sensitivity. A separate cow-only update did not convincingly improve arrivals.
 Neither candidate passed the no-automatic-promotion diagnostic, so the original
 M5c/M5b policy pair remains preferred. Details, controls, and research caveats:
 [**M16a Joint Herd Reliability**](docs/M16A_JOINT_HERD_RELIABILITY.md).
+
+## M16b: learned nomad defense curriculum (experimental)
+
+M16b adds seeded Guard/Intercept combat encounters, mixed migration/defense
+rehearsal, optional `--anchor-kl` regularization against a frozen starting
+policy, and a non-destructive `compare-defenders` evaluator. The baseline
+nomad does not engage ravagers reliably; in short controlled encounters the
+Guard-trained candidate learns to attack and survive more often but **loses
+pasture-arrival performance**. Neither candidate is promoted automatically.
+The ordinary ecosystem's rules and older checkpoint formats are unchanged.
+
+See [M16b defense methods and results](docs/M16B_NOMAD_DEFENSE.md).

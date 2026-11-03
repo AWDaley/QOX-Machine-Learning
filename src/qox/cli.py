@@ -117,7 +117,8 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--scenario", choices=farmer_scenarios, default="agriculture")
         cmd.add_argument("--mode", choices=("policy", "random", "scripted"), default="policy")
         cmd.add_argument("--report", type=Path)
-    nomad_scenarios = ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed")
+    nomad_scenarios = ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
+                       "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed")
     train_nomad = sub.add_parser("train-nomad", help="Train a nomad with cattle signals and defense")
     train_nomad.add_argument("--steps", type=int, default=16384)
     train_nomad.add_argument("--seed", type=int, default=42)
@@ -125,6 +126,8 @@ def parser() -> argparse.ArgumentParser:
     train_nomad.add_argument("--rollout", type=int, default=256)
     train_nomad.add_argument("--max-steps", type=int, default=96)
     train_nomad.add_argument("--scenario", choices=nomad_scenarios, default="nomad_herd")
+    train_nomad.add_argument("--anchor-kl", type=float, default=0.0,
+                             help="KL regularization toward the starting nomad policy")
     train_nomad.add_argument("--output", type=Path, default=Path("runs/nomad.pt"))
     train_nomad.add_argument("--init-checkpoint", type=Path,
                              help="Warm-start from a compatible trained nomad policy")
@@ -141,7 +144,7 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--scenario", choices=nomad_scenarios, default="nomad_herd")
         cmd.add_argument("--mode", choices=("policy", "policy_greedy", "policy_nocalls",
                                             "policy_greedy_nocalls", "policy_greedy_flipped",
-                                            "random", "scripted", "scripted_nocalls",
+                                            "policy_greedy_noattack", "random", "scripted", "scripted_nocalls",
                                             "scripted_flipped"), default="policy")
         cmd.add_argument("--report", type=Path)
     joint = sub.add_parser("train-herd", help="M5c: alternate cow/nomad PPO against frozen partners")
@@ -180,6 +183,14 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument("--seed", type=int, default=660000)
     compare.add_argument("--max-steps", type=int, default=96)
     compare.add_argument("--report", type=Path)
+    defender = sub.add_parser("compare-defenders", help="M16b: paired nomad defender gate")
+    defender.add_argument("--baseline-nomad", type=Path, required=True)
+    defender.add_argument("--candidate-nomad", type=Path, required=True)
+    defender.add_argument("--cow-checkpoint", type=Path, required=True)
+    defender.add_argument("--episodes", type=int, default=48)
+    defender.add_argument("--seed", type=int, default=910000)
+    defender.add_argument("--max-steps", type=int, default=48)
+    defender.add_argument("--report", type=Path)
     ravager_scenarios = ("ravager_ambush", "ravager_carcass",
                          "ravager_hibernate", "ravager_mixed")
     predator = sub.add_parser("train-ravager", help="M6: train masked PPO ravager policy")
@@ -385,6 +396,20 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({k: {key: value for key, value in report.items()
                               if key != "results"} for k, report in results.items()}, indent=2))
         return 0
+    if args.command == "compare-defenders":
+        try:
+            from .learning.defender_eval import compare_defenders
+        except ImportError as exc:
+            raise SystemExit("Defender evaluation requires PyTorch") from exc
+        report = compare_defenders(args.baseline_nomad, args.candidate_nomad,
+                                   args.cow_checkpoint, episodes=args.episodes,
+                                   seed=args.seed, max_steps=args.max_steps)
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps({key: value for key, value in report.items()
+                          if key != "scenarios"}, indent=2))
+        return 0
     if args.command == "compare-herd":
         try:
             from .learning.joint_ppo import compare_joint
@@ -437,7 +462,8 @@ def main(argv: list[str] | None = None) -> int:
                 steps=args.steps, seed=args.seed, worlds=args.worlds,
                 rollout=args.rollout, max_steps=args.max_steps,
                 scenario=args.scenario,
-                nomad_v2=args.nomad_v2 or args.scenario == "nomad_signal"),
+                nomad_v2=args.nomad_v2 or args.scenario == "nomad_signal",
+                anchor_kl=args.anchor_kl),
                 args.output, init_checkpoint=args.init_checkpoint)
             print(json.dumps({k: v for k, v in result.items()
                               if k not in ("history", "recent_returns")}, indent=2))
