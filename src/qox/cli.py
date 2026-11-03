@@ -133,6 +133,8 @@ def parser() -> argparse.ArgumentParser:
     staged.add_argument("--output-dir", type=Path, required=True)
     staged.add_argument("--training-seeds", type=int, nargs="+", default=[17, 37, 59])
     staged.add_argument("--stage-steps", type=int, default=4096)
+    staged.add_argument("--interleave-cycles", type=int, default=1,
+                        help="M16h: alternate all four on-policy curricula this many times")
     staged.add_argument("--worlds", type=int, default=4)
     staged.add_argument("--rollout", type=int, default=256)
     staged.add_argument("--epochs", type=int, default=4)
@@ -150,13 +152,15 @@ def parser() -> argparse.ArgumentParser:
     staged.add_argument("--rehearsal-episodes", type=int, default=4)
     staged.add_argument("--rehearsal-max-steps", type=int, default=96)
     sweep = sub.add_parser("sweep-farmers",
-                           help="M16f: compare safety weights and stage budgets before one audit")
+                           help="M16: compare farmer safety, rehearsal and training schedules")
     sweep.add_argument("--baseline", type=Path, required=True)
     sweep.add_argument("--output-dir", type=Path, required=True)
     sweep.add_argument("--weights", type=float, nargs="+", default=[1.0, 3.0, 6.0])
     sweep.add_argument("--stage-budgets", type=int, nargs="+", default=[1024, 4096])
     sweep.add_argument("--rehearsal-kls", type=float, nargs="+", default=[0.0],
                        help="M16g: compare frozen-M4 farming replay strengths; 0 is control")
+    sweep.add_argument("--interleave-cycles", type=int, nargs="+", default=[1],
+                       help="M16h: 1 is sequential control; 2–8 alternate all four tasks")
     sweep.add_argument("--training-seeds", type=int, nargs="+", default=[17, 37, 59])
     sweep.add_argument("--worlds", type=int, default=4)
     sweep.add_argument("--rollout", type=int, default=256)
@@ -565,6 +569,7 @@ def main(argv: list[str] | None = None) -> int:
             survival_weights=tuple(args.weights),
             stage_budgets=tuple(args.stage_budgets),
             rehearsal_kls=tuple(args.rehearsal_kls),
+            interleave_cycles=tuple(args.interleave_cycles),
             training_seeds=tuple(args.training_seeds),
             worlds=args.worlds, rollout=args.rollout, epochs=args.epochs,
             max_steps_override=args.episode_cap,
@@ -598,7 +603,8 @@ def main(argv: list[str] | None = None) -> int:
             rehearsal_kl=args.rehearsal_kl,
             rehearsal_seed=args.rehearsal_seed,
             rehearsal_episodes=args.rehearsal_episodes,
-            rehearsal_max_steps=args.rehearsal_max_steps)
+            rehearsal_max_steps=args.rehearsal_max_steps,
+            interleave_cycles=args.interleave_cycles)
         report = train_farmer_staged(args.baseline, args.output_dir, options)
         print(json.dumps({"summary": str(args.output_dir / "summary.json"),
                           "training_seeds": args.training_seeds,

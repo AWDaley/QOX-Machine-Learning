@@ -36,6 +36,7 @@ class StagedFarmerOptions:
     rehearsal_seed: int = 1_200_000
     rehearsal_episodes: int = 4
     rehearsal_max_steps: int = 96
+    interleave_cycles: int = 1
 
     def __post_init__(self) -> None:
         seeds = self.training_seeds
@@ -50,6 +51,15 @@ class StagedFarmerOptions:
             raise ValueError("Episode cap must be positive")
         if self.rollout < self.worlds or self.rollout % self.worlds:
             raise ValueError("Rollout must be divisible by worlds")
+        if not 1 <= self.interleave_cycles <= 8:
+            raise ValueError("Interleave cycles must be between 1 and 8")
+        if (self.interleave_cycles > 1 and
+                self.steps_per_stage % (self.rollout * self.interleave_cycles)):
+            raise ValueError("Interleaved stage budget must be divisible by cycles * rollout")
+        if (self.interleave_cycles > 1 and
+                self.steps_per_stage // self.interleave_cycles // self.worlds <
+                (self.max_steps_override or max(horizon for _, horizon in STAGES))):
+            raise ValueError("Each interleaved segment must cover a full mixed episode")
         if not 1.0 <= self.survival_weight <= 20.0:
             raise ValueError("Survival weight must be between 1 and 20")
         if not 0 <= self.rehearsal_kl <= 10.0:
@@ -117,6 +127,16 @@ def _stage_seed(replica: int, stage: int, seed_id: int) -> int:
     return 2_000_000_000 + replica * 10_000_000 + stage * 100_000_000 + seed_id
 
 
+def _interleave_seed(replica: int, cycle: int, stage: int, seed_id: int) -> int:
+    """Nonoverlapping training namespace for up to eight rehearsal cycles.
+
+    Every field has an exclusive decimal block; the maximum value is below
+    2**32 for NumPy legacy seeding. Evaluation seeds are below one billion.
+    """
+    return (3_000_000_000 + replica * 100_000_000 + cycle * 10_000_000 +
+            stage * 1_000_000 + seed_id)
+
+
 def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                         options: StagedFarmerOptions, *, audit_enabled: bool = True) -> dict:
     """Train independent continuations and audit at most one selected candidate.
@@ -148,31 +168,39 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
         previous = baseline
         stage_records: list[dict] = []
         replica_dir = output_dir / f"seed_{seed_id}"
-        for stage_index, (scenario, recommended_steps) in enumerate(STAGES):
-            stage_seed = _stage_seed(index, stage_index, seed_id)
-            checkpoint = replica_dir / f"stage_{stage_index + 1}_{scenario}.pt"
-            stage_options = FarmerTrainOptions(
-                steps=options.steps_per_stage, seed=stage_seed,
-                worlds=options.worlds, rollout=options.rollout, epochs=options.epochs,
-                max_steps=options.max_steps_override or recommended_steps,
-                scenario=scenario, hidden=hidden,
-                survival_weight=options.survival_weight if stage_index >= 2 else 1.0,
-                rehearsal_kl=options.rehearsal_kl)
-            if rehearsal is None:
-                result = train_farmer(stage_options, checkpoint, init_checkpoint=previous)
-            else:
-                result = train_farmer(stage_options, checkpoint, init_checkpoint=previous,
-                                      rehearsal=rehearsal)
-            stage_records.append({
-                "scenario": scenario, "seed": stage_seed, "checkpoint": str(checkpoint),
-                "checkpoint_sha256": _sha(checkpoint),
-                "decisions": result["farmer_steps"],
-                "survival_weight": stage_options.survival_weight,
-                "rehearsal_kl": stage_options.rehearsal_kl,
-                "final_rehearsal_kl": result.get("final_rehearsal_kl", 0.0),
-                "completed_episodes": result["completed_episodes"],
-            })
-            previous = checkpoint
+        for cycle in range(options.interleave_cycles):
+            for stage_index, (scenario, recommended_steps) in enumerate(STAGES):
+                if options.interleave_cycles == 1:
+                    # Keep the historical M16f/M16g control bit-for-bit identical.
+                    stage_seed = _stage_seed(index, stage_index, seed_id)
+                    checkpoint = replica_dir / f"stage_{stage_index + 1}_{scenario}.pt"
+                else:
+                    stage_seed = _interleave_seed(index, cycle, stage_index, seed_id)
+                    checkpoint = replica_dir / (
+                        f"cycle_{cycle + 1}_stage_{stage_index + 1}_{scenario}.pt")
+                stage_options = FarmerTrainOptions(
+                    steps=options.steps_per_stage // options.interleave_cycles,
+                    seed=stage_seed, worlds=options.worlds,
+                    rollout=options.rollout, epochs=options.epochs,
+                    max_steps=options.max_steps_override or recommended_steps,
+                    scenario=scenario, hidden=hidden,
+                    survival_weight=options.survival_weight if stage_index >= 2 else 1.0,
+                    rehearsal_kl=options.rehearsal_kl)
+                if rehearsal is None:
+                    result = train_farmer(stage_options, checkpoint, init_checkpoint=previous)
+                else:
+                    result = train_farmer(stage_options, checkpoint, init_checkpoint=previous,
+                                          rehearsal=rehearsal)
+                stage_records.append({
+                    "cycle": cycle + 1, "scenario": scenario, "seed": stage_seed,
+                    "checkpoint": str(checkpoint), "checkpoint_sha256": _sha(checkpoint),
+                    "decisions": result["farmer_steps"],
+                    "survival_weight": stage_options.survival_weight,
+                    "rehearsal_kl": stage_options.rehearsal_kl,
+                    "final_rehearsal_kl": result.get("final_rehearsal_kl", 0.0),
+                    "completed_episodes": result["completed_episodes"],
+                })
+                previous = checkpoint
 
         development = compare_farmers(
             baseline, previous, episodes=options.development_episodes,
@@ -210,6 +238,7 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
         "version": 1, "method": "staged_farmer_multi_seed",
         "baseline": str(baseline), "baseline_sha256": original_hash,
         "options": asdict(options), "stages": [name for name, _ in STAGES],
+        "training_sequence": [stage["scenario"] for stage in replicas[0]["stages"]],
         "rehearsal": rehearsal.metadata if rehearsal is not None else None,
         "replicas": replicas, "audit": audit, "audit_deferred": not audit_enabled,
         "enough_training_seeds": len(options.training_seeds) >= 3,
