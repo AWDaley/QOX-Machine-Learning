@@ -96,3 +96,5 @@ jobs:
       - run: qox sweep-farmers --baseline runs/ci-farmer.pt --output-dir runs/ci-m16g --weights 3 --stage-budgets 64 --rehearsal-kls 0 0.5 --training-seeds 17 --worlds 2 --rollout 64 --epochs 1 --episode-cap 18 --rehearsal-episodes 1 --rehearsal-max-steps 18 --development-episodes 2 --audit-episodes 2
       - run: python -m pytest -q tests/test_m16h_farmer_interleave.py
       - run: qox sweep-farmers --baseline runs/ci-farmer.pt --output-dir runs/ci-m16h --weights 3 --stage-budgets 256 --interleave-cycles 1 4 --training-seeds 17 --worlds 2 --rollout 64 --epochs 1 --episode-cap 18 --development-episodes 2 --audit-episodes 2
+      - run: python -m pytest -q tests/test_m16i_manure_credit.py
+      - run: qox sweep-farmers --baseline runs/ci-farmer.pt --output-dir runs/ci-m16i --weights 3 --stage-budgets 256 --interleave-cycles 4 --manure-credits 0 0.5 --training-seeds 17 --worlds 2 --rollout 64 --epochs 1 --episode-cap 18 --development-episodes 2 --audit-episodes 2

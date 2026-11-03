@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 import numpy as np
 import torch
@@ -20,7 +20,7 @@ from torch.distributions.kl import kl_divergence
 
 from ..actions import Kind
 from ..agents import scripted_actions
-from ..entities import Species
+from ..entities import Event, Species
 from ..envs.core import QoxCoreEnv
 from ..perception import ACTIONS, FARMER_OBSERVATION_VERSION, features_for, observation_size
 
@@ -70,6 +70,7 @@ class FarmerTrainOptions:
     hidden: int = 64
     survival_weight: float = 1.0
     rehearsal_kl: float = 0.0
+    manure_credit: float = 0.0
 
     def __post_init__(self) -> None:
         if self.scenario not in FARMER_SCENARIOS:
@@ -87,6 +88,8 @@ class FarmerTrainOptions:
             raise ValueError("Farmer survival weight must be between 1 and 20")
         if not 0.0 <= self.rehearsal_kl <= 10.0:
             raise ValueError("Farmer rehearsal KL weight must be between 0 and 10")
+        if not 0.0 <= self.manure_credit <= 2.0:
+            raise ValueError("Manure credit must be between 0 and 2")
 
 
 def _fresh_env(scenario: str, max_steps: int) -> QoxCoreEnv:
@@ -105,6 +108,25 @@ def _safety_adjusted_reward(reward: float, components: dict[str, float],
     """
     return reward + (weight - 1.0) * (components.get("injury", 0.0) +
                                      components.get("death", 0.0))
+
+
+def _manure_event_credit(events: Iterable[Event], farmer_id: int,
+                         strength: float) -> tuple[float, float, float]:
+    """Training-only shaping from actual, farmer-owned resource transfers.
+
+    Collecting finite waste earns one-fifth of the credit for *useful* manure
+    applied to depleted soil. An attempted action, an empty tile, full soil,
+    or another actor's events earn nothing. This never changes world rewards.
+    """
+    collected = applied = 0.0
+    for event in events:
+        if event.actor_id != farmer_id or event.amount <= 0:
+            continue
+        if event.kind == "collect_waste":
+            collected += event.amount
+        elif event.kind == "fertilize":
+            applied += event.amount
+    return collected, applied, strength * (applied + 0.2 * collected)
 
 
 def train_farmer(options: FarmerTrainOptions, output: str | Path,
@@ -161,6 +183,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
               for i, env in enumerate(envs)]
     active_returns = [0.0] * options.worlds
     completed_returns: list[float] = []
+    manure_collected = manure_applied = manure_credit_awarded = 0.0
     steps = 0
     history = []
     while steps < options.steps:
@@ -185,6 +208,12 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                 reward = _safety_adjusted_reward(
                     float(earned[names[i]]),
                     infos[names[i]]["reward_components"], options.survival_weight)
+                collected, applied, credit = _manure_event_credit(
+                    env.world.last_events, env.name_to_id[names[i]], options.manure_credit)
+                manure_collected += collected
+                manure_applied += applied
+                manure_credit_awarded += credit
+                reward += credit
                 done = bool(terminated[names[i]] or truncated[names[i]])
                 active_returns[i] += reward
                 step_rewards.append(reward)
@@ -260,6 +289,9 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         history.append({"farmer_steps": steps, "completed_episodes": len(completed_returns),
                         "loss": round(last_loss, 5),
                         "rehearsal_kl": round(last_rehearsal_kl, 6),
+                        "manure_collected": round(manure_collected, 4),
+                        "manure_applied": round(manure_applied, 4),
+                        "manure_credit_awarded": round(manure_credit_awarded, 4),
                         "mean_recent_return": round(float(np.mean(completed_returns[-30:])), 4)
                         if completed_returns else None})
         if progress_callback is not None:
@@ -281,6 +313,9 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
     report = {"checkpoint": str(output), "farmer_steps": steps,
               "completed_episodes": len(completed_returns),
               "final_rehearsal_kl": round(last_rehearsal_kl, 6),
+              "manure_collected": round(manure_collected, 4),
+              "manure_applied": round(manure_applied, 4),
+              "manure_credit_awarded": round(manure_credit_awarded, 4),
               "rehearsal": rehearsal.metadata if options.rehearsal_kl and rehearsal else None,
               "recent_returns": completed_returns[-30:], "history": history}
     output.with_suffix(".metrics.json").write_text(json.dumps(report, indent=2),

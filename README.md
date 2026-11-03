@@ -466,3 +466,27 @@ In the first six-candidate M4 study, interleaving improved average safe food
 and threatened health relative to sequential training, but all candidates
 still lagged M4 on food/manure and **none qualified**. The audit remained
 unused; no model was installed. See [M16h methodology and results](docs/M16H_INTERLEAVED_FARMER.md).
+
+## M16i — Training-only manure credit assignment
+
+The farmer PPO trainer now accepts `--manure-credit`, and the staged sweep
+accepts `--manure-credits`. Each bonus is based exclusively on **verified
+farmer-owned, finite resource events**: useful fertilizer applied earns the
+specified extra PPO reward per unit and collected manure earns one-fifth as
+much. Failed attempts cannot earn a bonus. The default `0` matches the old
+training reward, and world physics, evaluation rewards, installed networks,
+and legacy checkpoint input/action formats remain unchanged.
+
+```powershell
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16i_001 --weights 3 --stage-budgets 4096 --interleave-cycles 4 --manure-credits 0 0.3 1.0 --epochs 2 --training-seeds 17 37 59 --development-episodes 48 --audit-episodes 48 --development-seed 2200000 --audit-seed 3200000 --dry-run
+```
+
+Remove `--dry-run` to train against the read-only M4 reference. The matched
+study uses 147,456 PPO decisions across three strengths and three seeds;
+its disjoint audit remains closed unless one candidate passes **all** of the
+original food, manure, survival, health and crop-damage gates. See
+[M16i design and experiment](docs/M16I_MANURE_CREDIT.md). In the completed
+M4-controlled study, stronger credit increased actual fertilizer use during
+training, but did not reliably transfer to held-out farms and reduced food
+production. **None of nine candidates qualified**; the audit was not opened
+and the installed model remains unchanged.
