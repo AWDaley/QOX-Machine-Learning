@@ -1,6 +1,6 @@
 # QOX — Recommended Improvement Roadmap (M12–M18)
 
-**Status:** M12–M15 merged; M16 research in progress through M16e, with no
+**Status:** M12–M15 merged; M16 research in progress through M16f, with no
 unqualified experimental models promoted. M17–M18 remain planned.
 **Repository:** https://github.com/AWDaley/QOX-Machine-Learning  
 **Baseline:** M11 resizable pixel-art viewer, M10 desktop launcher, M0–M9 simulation and neural-network systems.  

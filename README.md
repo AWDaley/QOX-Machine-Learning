@@ -399,3 +399,21 @@ for diagnosis; **no checkpoint is ever installed automatically**. The output
 directory must be new so existing experiments cannot be overwritten. See
 [the M16e guide](docs/M16E_STAGED_FARMER.md) for the evaluation gate and
 low-cost smoke settings.
+
+## M16f — Farmer survival-weight and training-budget sweep
+
+The optional `sweep-farmers` workflow compares multiple staged PPO safety
+weights and per-stage decision budgets against the **same frozen baseline**.
+It uses shared development seeds to choose one global winner; no other
+candidate sees the separate audit range. A dry-run estimates the CPU work
+without writing any files.
+
+```powershell
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16f_001 --weights 1 3 6 --stage-budgets 1024 4096 --dry-run
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16f_001 --weights 1 3 --stage-budgets 1024 --training-seeds 17 37 59 --development-episodes 48 --audit-episodes 48
+```
+
+Only the selected development qualifier receives an audit plus scripted and
+random reference comparisons. All candidate checkpoints stay separate and
+unpromoted. The M4 baseline is a **user-provided checkpoint**, not included
+in the Git repository. See [M16f methods and findings](docs/M16F_FARMER_SWEEP.md).
