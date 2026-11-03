@@ -118,7 +118,7 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--mode", choices=("policy", "random", "scripted"), default="policy")
         cmd.add_argument("--report", type=Path)
     nomad_scenarios = ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
-                       "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed")
+                       "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "nomad_convoy", "nomad_convoy_mixed")
     train_nomad = sub.add_parser("train-nomad", help="Train a nomad with cattle signals and defense")
     train_nomad.add_argument("--steps", type=int, default=16384)
     train_nomad.add_argument("--seed", type=int, default=42)
@@ -153,7 +153,7 @@ def parser() -> argparse.ArgumentParser:
     joint.add_argument("--output-dir", type=Path, default=Path("runs/joint-herd"))
     joint.add_argument("--phase", choices=("alternate", "cow", "nomad"),
                        default="alternate", help="Train both roles or keep one frozen")
-    joint.add_argument("--scenario", choices=("nomad_herd", "nomad_defend", "nomad_mixed"),
+    joint.add_argument("--scenario", choices=("nomad_herd", "nomad_defend", "nomad_mixed", "nomad_convoy", "nomad_convoy_mixed"),
                        default="nomad_herd", help="Training mixture: migration, defense, or both")
     joint.add_argument("--partner-mode", choices=("greedy", "sample"), default="greedy",
                        help="Use greedy or sampled actions from the frozen partner")
@@ -168,7 +168,7 @@ def parser() -> argparse.ArgumentParser:
     comparison = sub.add_parser("benchmark-herd", help="M5c: paired two-learned-policy call ablations")
     comparison.add_argument("--cow-checkpoint", type=Path, required=True)
     comparison.add_argument("--nomad-checkpoint", type=Path, required=True)
-    comparison.add_argument("--scenario", choices=("nomad_herd", "nomad_defend", "nomad_mixed"),
+    comparison.add_argument("--scenario", choices=("nomad_herd", "nomad_defend", "nomad_mixed", "nomad_convoy", "nomad_convoy_mixed"),
                             default="nomad_herd")
     comparison.add_argument("--episodes", type=int, default=24)
     comparison.add_argument("--seed", type=int, default=340000)
@@ -191,6 +191,14 @@ def parser() -> argparse.ArgumentParser:
     defender.add_argument("--seed", type=int, default=910000)
     defender.add_argument("--max-steps", type=int, default=48)
     defender.add_argument("--report", type=Path)
+    protector = sub.add_parser("compare-protectors",
+                               help="M16c: paired convoy, attack and migration gate")
+    for label in ("baseline-cow", "baseline-nomad", "candidate-cow", "candidate-nomad"):
+        protector.add_argument("--" + label, type=Path, required=True)
+    protector.add_argument("--episodes", type=int, default=48)
+    protector.add_argument("--seed", type=int, default=1160000)
+    protector.add_argument("--max-steps", type=int, default=80)
+    protector.add_argument("--report", type=Path)
     ravager_scenarios = ("ravager_ambush", "ravager_carcass",
                          "ravager_hibernate", "ravager_mixed")
     predator = sub.add_parser("train-ravager", help="M6: train masked PPO ravager policy")
@@ -395,6 +403,18 @@ def main(argv: list[str] | None = None) -> int:
             args.report.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(json.dumps({k: {key: value for key, value in report.items()
                               if key != "results"} for k, report in results.items()}, indent=2))
+        return 0
+    if args.command == "compare-protectors":
+        from .learning.protector_eval import compare_protectors
+        result = compare_protectors(
+            args.baseline_cow, args.baseline_nomad,
+            args.candidate_cow, args.candidate_nomad,
+            episodes=args.episodes, seed=args.seed, max_steps=args.max_steps)
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        print(json.dumps({key: value for key, value in result.items()
+                          if key != "cases"}, indent=2))
         return 0
     if args.command == "compare-defenders":
         try:

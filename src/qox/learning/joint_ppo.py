@@ -53,8 +53,8 @@ class JointTrainOptions:
             raise ValueError("All training sizes and budgets must be positive")
         if self.rollout % (self.worlds * 3):
             raise ValueError("rollout must be divisible by three cows per world")
-        if self.scenario not in ("nomad_herd", "nomad_defend", "nomad_mixed"):
-            raise ValueError("Joint scenario must be nomad_herd, nomad_defend or nomad_mixed")
+        if self.scenario not in ("nomad_herd", "nomad_defend", "nomad_mixed", "nomad_convoy", "nomad_convoy_mixed"):
+            raise ValueError("Joint scenario must be one of the supported migration/defense/convoy tasks")
         if self.partner_mode not in ("greedy", "sample"):
             raise ValueError("Partner mode must be greedy or sample")
         if not (self.lr > 0 and 0 < self.gamma <= 1 and 0 <= self.gae_lambda <= 1
@@ -320,7 +320,7 @@ def benchmark_joint(cow_checkpoint: str | Path, nomad_checkpoint: str | Path, *,
     """
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes and max_steps must be positive")
-    if scenario not in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+    if scenario not in ("nomad_herd", "nomad_defend", "nomad_mixed", "nomad_convoy", "nomad_convoy_mixed"):
         raise ValueError("Unsupported joint herding evaluation scenario")
     modes = {"learned": "policy_greedy",
              "no_calls": "policy_greedy_nocalls",
