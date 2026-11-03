@@ -362,3 +362,20 @@ nomad policy improves isolated Guard/Intercept encounters but performs worse
 in the new convoy survival test. Both remain experimental.
 
 See [M16c evaluation methods](docs/M16C_GENERALIZABLE_PROTECTION.md).
+
+
+## M16d — Longer farmer planning
+
+Three curricula (`farmstead`, `farmstead_threat`, `farmstead_mixed`)
+combine crop growth, real cattle crop damage, finite manure, settlement
+storage and predator refuge. Windows Training Lab exposes these scenarios;
+old farmer checkpoints and observation/action schemas remain compatible.
+
+```powershell
+qox train-farmer --scenario farmstead_mixed --steps 4096 --max-steps 192 --output runs/m16d_candidate.pt
+qox compare-farmers --baseline runs/baseline_farmer.pt --candidate runs/m16d_candidate.pt --episodes 48 --max-steps 192 --report runs/m16d_review.json
+```
+
+The exploratory farmer policy deposited more food but lost survival and
+manure effectiveness under predators, so it is **not promoted**. See
+[the M16d research report](docs/M16D_FARMER_PLANNING.md).
