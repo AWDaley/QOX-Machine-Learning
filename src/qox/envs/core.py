@@ -33,7 +33,7 @@ class QoxCoreEnv:
                  nomad_v2: bool = False, festival_actions: bool = False):
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
-        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed", "scavenger_waste", "scavenger_carrion", "scavenger_competition", "scavenger_mixed",
+        if scenario not in ("natural", "forage", "threat", "agriculture", "refuge", "manure", "farmer_mixed", "nomad_herd", "nomad_defend", "nomad_mixed", "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed", "cow_signal", "nomad_signal", "ravager_ambush", "ravager_carcass", "ravager_hibernate", "ravager_mixed", "scavenger_waste", "scavenger_carrion", "scavenger_competition", "scavenger_mixed",
                             "festival_farmer", "festival_nomad", "festival_combined",
                             "festival_ravager"):
             raise ValueError(f"Unknown scenario: {scenario}")
@@ -64,10 +64,10 @@ class QoxCoreEnv:
                 config = SimulationConfig(width=12, height=12, farmers=1, cows=1,
                                           nomads=0, scavengers=0, ravagers=0,
                                           crop_growth=0.42, grass_growth=0.32)
-            elif scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+            elif scenario in ("nomad_herd", "nomad_defend", "nomad_mixed", "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed"):
                 config = SimulationConfig(width=14, height=12, farmers=0, cows=3,
                                           nomads=1, scavengers=0,
-                                          ravagers=1 if scenario == "nomad_defend" else 0,
+                                          ravagers=int(scenario in ("nomad_defend", "nomad_guard", "nomad_intercept", "nomad_defense_mix")),
                                           grass_growth=0.12, cow_metabolism=0.16)
             elif scenario == "nomad_signal":
                 config = SimulationConfig(width=20, height=20, farmers=0, cows=1,
@@ -97,12 +97,12 @@ class QoxCoreEnv:
                                           grass_growth=0.10)
             else:
                 config = SimulationConfig()
-        if scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+        if scenario in ("nomad_herd", "nomad_defend", "nomad_mixed", "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed"):
             if config.cows != 3 or config.nomads != 1 or config.farmers or config.scavengers:
                 raise ValueError("Nomad curricula require exactly 3 cows, 1 nomad, "
                                  "no farmers and no scavengers")
-            expected_ravagers = int(scenario == "nomad_defend")
-            if scenario != "nomad_mixed" and config.ravagers != expected_ravagers:
+            expected_ravagers = int(scenario in ("nomad_defend", "nomad_guard", "nomad_intercept", "nomad_defense_mix"))
+            if scenario not in ("nomad_mixed", "nomad_guard_mixed") and config.ravagers != expected_ravagers:
                 raise ValueError("Nomad curriculum predator count mismatch")
         if scenario.startswith("festival_") and not config.festival_enabled:
             raise ValueError("Festival scenarios require festival_enabled=True")
@@ -132,8 +132,10 @@ class QoxCoreEnv:
             raise TypeError("reset options must be a dictionary or None")
         seed = self.config.seed if seed is None else int(seed)
         config = self.config
-        if self.scenario == "nomad_mixed":
-            config = replace(config, ravagers=1 if seed % 2 else 0)
+        if self.scenario in ("nomad_mixed", "nomad_guard_mixed"):
+            config = replace(config, ravagers=(int((seed // 4) % 2)
+                                                if self.scenario == "nomad_guard_mixed"
+                                                else int(seed % 2)))
         if self.scenario == "farmer_mixed":
             # Training-only curriculum: instantiate the correct finite
             # population for each task rather than leave extra predators
@@ -172,7 +174,11 @@ class QoxCoreEnv:
         if self.scenario.startswith("festival_"):
             self._festival_scenario(rng, seed)
             return
-        if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed"):
+        if self.scenario in ("nomad_guard", "nomad_intercept", "nomad_defense_mix") or (
+                self.scenario == "nomad_guard_mixed" and (seed // 4) % 2):
+            self._nomad_defense_scenario(seed)
+            return
+        if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed", "nomad_guard_mixed"):
             self._nomad_scenario(rng, seed)
             return
         if self.scenario.startswith("ravager_"):
@@ -417,6 +423,48 @@ class QoxCoreEnv:
             # A wounded predator can be beaten by a coordinated defense, but
             # is individually much more threatening than a nomad.
             predator.health = 64.0
+        self.world.check_invariants()
+
+    def _nomad_defense_scenario(self, seed: int) -> None:
+        """Rotated real-combat encounters for a learned one-nomad defender.
+
+        The nomad can see the ravager but receives no privileged target label,
+        action instruction, or global coordinates. The predator uses normal
+        world actions and energy/health rules. Two difficulties teach adjacent
+        defense and positional interception. Nothing is awarded for *choosing*
+        to attack: cattle health and actual outcomes determine rewards.
+        """
+        nomad = next(a for a in self.world.actors.values()
+                     if a.species == Species.NOMAD)
+        cows = sorted((a for a in self.world.actors.values()
+                       if a.species == Species.COW), key=lambda a: a.id)
+        predator = next(a for a in self.world.actors.values()
+                        if a.species == Species.RAVAGER)
+        rotation = (seed // 8) % 4 if self.scenario == "nomad_guard_mixed" else seed % 4
+        challenging = (self.scenario == "nomad_intercept" or
+                       self.scenario == "nomad_defense_mix" and seed % 8 >= 4)
+        def place(dx: int, dy: int) -> tuple[int, int]:
+            for _ in range(rotation):
+                dx, dy = -dy, dx
+            return 7 + dx, 5 + dy
+
+        for actor, (dx, dy) in zip(cows, ((-2, -1), (-2, 0), (-2, 1)), strict=True):
+            actor.x, actor.y = place(dx, dy)
+            actor.energy, actor.health, actor.stamina = 75.0, 65.0, 100.0
+        nomad.x, nomad.y = place(0, (-1 if seed % 2 else 1) if challenging else 0)
+        if not challenging:
+            nomad.x, nomad.y = place(1, 0)
+        nomad.health, nomad.stamina, nomad.energy = 100.0, 100.0, 80.0
+        predator.x, predator.y = place(2 if not challenging else 3, 0)
+        predator.health = 24.0 if not challenging else 36.0
+        predator.stamina, predator.energy = 100.0, 80.0
+        for tile in self.world.grid.tiles:
+            tile.crop = tile.waste = tile.cover = 0.0
+            tile.planted = False
+            tile.grass, tile.fertility = 0.3, 0.6
+        for cow in cows:
+            self.world.grid.get(*cow.position).grass = 7.0
+        self.world.herd_goal = None
         self.world.check_invariants()
 
     def _nomad_signal_scenario(self, rng: random.Random) -> None:
@@ -743,7 +791,8 @@ class QoxCoreEnv:
             rewards[name] += value
             components[name][event.kind] += value
         if self.scenario in ("nomad_herd", "nomad_defend", "nomad_mixed",
-                             "cow_signal", "nomad_signal"):
+                             "nomad_guard", "nomad_intercept", "nomad_defense_mix",
+                             "nomad_guard_mixed", "cow_signal", "nomad_signal"):
             actual_cows = {aid: a for aid, a in self.world.actors.items()
                            if a.species == Species.COW}
             gained = set()
@@ -833,7 +882,8 @@ class QoxCoreEnv:
                 # already full energy bar; finite intake is directly rewarded.
             truncations[name] = self.world.tick >= self.max_steps
             if truncations[name] and name.startswith("nomad_") and self.scenario in (
-                    "nomad_herd", "nomad_defend", "nomad_mixed"):
+                    "nomad_herd", "nomad_defend", "nomad_mixed",
+                    "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed"):
                 # End-of-episode cow health/retention matters for nomad defense.
                 retained = [a for a in self.world.actors.values()
                             if a.species == Species.COW]

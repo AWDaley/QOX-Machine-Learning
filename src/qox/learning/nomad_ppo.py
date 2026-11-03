@@ -63,9 +63,11 @@ class NomadTrainOptions:
     entropy: float = 0.015
     hidden: int = 64
     nomad_v2: bool = False
+    anchor_kl: float = 0.0
 
     def __post_init__(self):
-        if self.scenario not in ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed"):
+        if self.scenario not in ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
+                                 "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed"):
             raise ValueError("Unknown nomad training scenario")
         if min(self.steps, self.max_steps, self.worlds, self.rollout,
                self.epochs, self.minibatch, self.hidden) <= 0:
@@ -73,7 +75,8 @@ class NomadTrainOptions:
         if self.rollout % self.worlds or self.rollout < self.worlds:
             raise ValueError("rollout must be divisible by worlds")
         if not (self.lr > 0 and 0 < self.gamma <= 1 and
-                0 <= self.gae_lambda <= 1 and 0 < self.clip < 1 and self.entropy >= 0):
+                0 <= self.gae_lambda <= 1 and 0 < self.clip < 1 and
+                self.entropy >= 0 and self.anchor_kl >= 0):
             raise ValueError("Invalid PPO hyperparameters")
 
 
@@ -95,6 +98,15 @@ def train_nomad(options: NomadTrainOptions, output: str | Path,
         raise ValueError("Initial nomad checkpoint observation version mismatch")
     if model.encoder[0].out_features != options.hidden:
         raise ValueError("Initial nomad checkpoint hidden size does not match requested size")
+    # Optional KL regularization toward the original learned policy to reduce
+    # catastrophic forgetting. No action is copied or overridden.
+    anchor = None
+    if options.anchor_kl:
+        if init_checkpoint is None:
+            raise ValueError("Anchor KL requires an initial checkpoint")
+        anchor = load_nomad(init_checkpoint).eval()
+        for param in anchor.parameters():
+            param.requires_grad_(False)
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=options.lr, eps=1e-5)
     if init_checkpoint is not None:
@@ -190,6 +202,11 @@ def train_nomad(options: NomadTrainOptions, output: str | Path,
                 loss = (-torch.minimum(ratio * adv[batch], clipped * adv[batch]).mean()
                         + 0.5 * (target_returns[batch] - predicted).square().mean()
                         - options.entropy * distribution.entropy().mean())
+                if anchor is not None:
+                    with torch.no_grad():
+                        reference, _ = anchor(xs[batch], ms[batch])
+                    loss = loss + options.anchor_kl * torch.distributions.kl.kl_divergence(
+                        reference, distribution).mean()
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -258,10 +275,12 @@ def evaluate_nomad(checkpoint: str | Path | None = None, *, episodes: int = 12,
     """
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes and max_steps must be positive")
-    if scenario not in ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed"):
+    if scenario not in ("nomad_signal", "nomad_herd", "nomad_defend", "nomad_mixed",
+                                 "nomad_guard", "nomad_intercept", "nomad_defense_mix", "nomad_guard_mixed"):
         raise ValueError("Unknown evaluation scenario")
     modes = ("policy", "policy_greedy", "policy_nocalls", "policy_greedy_nocalls",
-             "policy_greedy_flipped", "random", "scripted", "scripted_nocalls",
+             "policy_greedy_flipped", "policy_greedy_noattack",
+             "random", "scripted", "scripted_noattack", "scripted_nocalls",
              "scripted_flipped")
     if mode not in modes:
         raise ValueError("Unknown evaluation mode")
@@ -310,6 +329,8 @@ def evaluate_nomad(checkpoint: str | Path | None = None, *, episodes: int = 12,
                     idx = ACTIONS[Species.NOMAD].index(Action(swapped))
                     if not ob["action_mask"][idx]:
                         idx = 0
+            if mode.endswith("noattack") and ACTIONS[Species.NOMAD][idx].kind == Kind.ATTACK:
+                idx = 0  # No-attack counterfactual: same model and world seed.
             orders = {name: idx}
             if cow_model is not None:
                 for cow_name in observations:
@@ -343,7 +364,11 @@ def evaluate_nomad(checkpoint: str | Path | None = None, *, episodes: int = 12,
                                             if original_cow_count else 0),
                         "calls": len(calls),
                         "nomad_attacks": sum(e.kind == "nomad_attack" for e in events),
-                        "nomad_alive": nomad is not None})
+                        "nomad_alive": nomad is not None,
+                        "nomad_health": round(nomad.health, 3) if nomad else 0.0,
+                        "ravager_alive": any(a.species == Species.RAVAGER
+                                             for a in env.world.actors.values()),
+                        "cow_deaths": original_cow_count - len(cattle)})
     def mean(key):
         return round(float(np.mean([entry[key] for entry in results])), 4)
     report = {"mode": mode, "scenario": scenario, "episodes": episodes,
@@ -354,7 +379,10 @@ def evaluate_nomad(checkpoint: str | Path | None = None, *, episodes: int = 12,
               "mean_cows_alive": mean("cows_alive"),
               "mean_cow_health": mean("mean_cow_health"),
               "mean_calls": mean("calls"), "mean_nomad_attacks": mean("nomad_attacks"),
-              "nomad_survival_rate": mean("nomad_alive"), "results": results}
+              "nomad_survival_rate": mean("nomad_alive"),
+              "mean_nomad_health": mean("nomad_health"),
+              "ravager_survival_rate": mean("ravager_alive"),
+              "mean_cow_deaths": mean("cow_deaths"), "results": results}
     if scenario == "nomad_signal":
         report["mean_correct_calls"] = mean("correct_calls")
         report["mean_wrong_calls"] = mean("wrong_calls")
