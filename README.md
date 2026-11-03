@@ -443,3 +443,23 @@ world comparisons. In the first nine-candidate M4 study, stronger rehearsal
 reduced KL on the old training states but **did not retain food production
 on new farmsteads**; all nine candidates failed development. No audit was
 run or model promoted. See [M16g methods and findings](docs/M16G_FARMER_REHEARSAL.md).
+
+## M16h — Interleaved on-policy farming practice
+
+The staged farmer trainer now accepts `--interleave-cycles`. Setting 1
+retains the original single-pass agriculture → manure → refuge → mixed
+farmstead curriculum. Setting 4 trains the same four tasks in four repeated
+cycles, using real, freshly sampled PPO episodes during every visit. Each
+candidate receives the **same total decisions per task**; the optimizer
+continues across segments and no learned policy is installed automatically.
+
+```powershell
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16h_001 --weights 3 --stage-budgets 4096 --interleave-cycles 1 4 --epochs 2 --training-seeds 17 37 59 --development-seed 2000000 --audit-seed 3000000 --dry-run
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16h_001 --weights 3 --stage-budgets 4096 --interleave-cycles 1 4 --epochs 2 --training-seeds 17 37 59 --development-episodes 48 --audit-episodes 48 --development-seed 2000000 --audit-seed 3000000
+```
+
+The interleaved segment is validated to be long enough for at least one
+complete mixed-farmstead episode per worker. The control and interleaved
+model sets remain separate, the original M4 checkpoint is read-only, and
+only one development-qualified candidate may use the blind audit range.
+See [M16h methodology and results](docs/M16H_INTERLEAVED_FARMER.md).

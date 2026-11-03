@@ -1,6 +1,6 @@
 # QOX — Recommended Improvement Roadmap (M12–M18)
 
-**Status:** M12–M15 merged; M16 research in progress through M16g, with no
+**Status:** M12–M15 merged; M16 research in progress through M16h, with no
 unqualified experimental models promoted. M17–M18 remain planned.
 **Repository:** https://github.com/AWDaley/QOX-Machine-Learning  
 **Baseline:** M11 resizable pixel-art viewer, M10 desktop launcher, M0–M9 simulation and neural-network systems.  
@@ -167,10 +167,10 @@ All PRs should include small acceptance tests, no accidental feature/action shap
 
 A user can launch QOX, recognize exactly what the actors are doing, inspect what each network perceived and chose, follow events and population charts, train and compare candidate models, save both models and world separately, replay a failure, and run reproducible long-term stability studies across different seeds.
 
-**Current recommended follow-up:** M16g frozen-policy rehearsal lowered
-teacher KL but none of nine candidates preserved farming well enough to
-qualify. Test interleaved on-policy agriculture/manure episodes or recovery-
-state rehearsal before repeating the safety audit. Then finish M16
+**Current recommended follow-up:** Evaluate M16h matched-budget interleaved
+on-policy agriculture/manure/refuge practice against the M4 baseline on
+independent development seeds. M16g KL rehearsal alone did not improve
+held-out farming. Then finish M16
 replication with independent partner policies and begin M17
 multi-seed ecological calibration before shipping a performance-focused M18
 release. The original M12 event-visibility foundation is already merged.

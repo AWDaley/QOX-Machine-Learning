@@ -1,0 +1,101 @@
+# M16h — Interleaved on-policy farmer curricula
+
+**Status:** Implemented for staged training and the global farmer sweep;
+controlled M4-baseline evaluation in progress. No model is installed
+automatically.
+
+## Motivation
+
+M16f found that staged agriculture → manure → refuge → mixed-farmstead PPO
+lost food production relative to the frozen M4 farmer. M16g's offline
+teacher KL reduced divergence on stored M4 states but failed to retain
+farming in new worlds. The next hypothesis is that **frequent on-policy
+revisits to the real farming worlds** will preserve useful behaviors more
+effectively than forcing resemblance to a fixed set of old observations.
+
+## Training method
+
+Both arms start from the same immutable, trained M4 checkpoint.
+
+| Setting | Sequential control (1 cycle) | Interleaved (4 cycles) |
+| --- | --- | --- |
+| Scenario schedule | agriculture → manure → refuge → mixed farmstead | (agriculture → manure → refuge → mixed farmstead) repeated four times |
+| PPO decisions per scenario | 4,096 in one stage | 4 × 1,024 decisions |
+| Total farmer decisions | 16,384 per training seed | 16,384 per training seed |
+| PPO optimizer | Adam, carried across all stages | Same Adam, carried across all 16 segments |
+| PPO epochs per update | 2 | 2 |
+| Survival penalty | 1× farming, 3× refuge/mixed | Identical task-specific multiplier in every cycle |
+| Training partners | Scripted nonfarmer agents | Same scripted partners |
+| M4 teacher KL | Disabled (0) | Disabled (0) |
+
+Every segment collects **fresh on-policy PPO trajectories** from its own
+training worlds. Changing tasks never copies or forces an action into the
+student policy. Model weights and Adam optimizer state continue from the
+previous segment. Historical one-cycle training seed generation and stage
+file names remain unchanged; the new four-cycle option has a separate
+deterministic 3B+ seed namespace and descriptive `cycle_N_stage_N_*.pt`
+checkpoints.
+
+The per-cycle decision budget must be an exact multiple of the PPO rollout
+and must cover at least one **complete episode per environment worker** for
+the longest configured scenario. This prevents apparent rehearsal that
+only sees the first few ticks of a 192-tick farmstead. A per-task stage
+budget of 4,096 with four cycles, four workers and rollout 256 meets
+this constraint.
+
+## Predeclared controlled study
+
+- Original checkpoint: M4 farmer trained for 32,768 decisions, archived
+  SHA-256 `5036afd395239049b5b99cef4aec7b99277c118eec705cb185fe3124a77938dd`.
+- Two schedules: 1 cycle (sequential control) vs. 4 cycles.
+- Matching seeds: 17, 37, 59; survival weight 3; 4,096 decisions per task;
+  epochs 2; workers 4; rollout 256.
+- Evaluation: 48 matched safe and 48 threatened farmsteads per candidate,
+  192 ticks per episode. All six candidates use the same new development
+  seed blocks 2,000,000 and 2,100,000.
+- Blind audit reserved at 3,000,000 and 3,100,000. Only the **single**
+  preselected development qualifier, if any, can read those seeds. At
+  least three training seeds and 48 evaluation episodes per scenario are
+  required for manual review. Audit cannot be used for tuning or retrying.
+- Report paired seed-level food/manure, crop damage, refuge, survival,
+  health and uncertainty. The unchanged M16e safety and food-gain gate
+  applies to both schedules, and no candidate replaces a model set.
+
+The new development and audit seed blocks are different from M16f's
+1.6M/2.6M and M16g's 1.8M/2.8M blocks. The 3B+ on-policy training seeds
+remain separate from all evaluation blocks and the older 2B+ control seeds.
+
+### Command line
+
+Supply your own archived M4 checkpoint; it is not in the Git repository.
+Estimate cost without opening that file or creating output directories:
+
+```powershell
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16h_001 --weights 3 --stage-budgets 4096 --interleave-cycles 1 4 --epochs 2 --training-seeds 17 37 59 --development-seed 2000000 --audit-seed 3000000 --dry-run
+```
+
+Run the same predeclared comparison:
+
+```powershell
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16h_001 --weights 3 --stage-budgets 4096 --interleave-cycles 1 4 --epochs 2 --training-seeds 17 37 59 --development-episodes 48 --audit-episodes 48 --development-seed 2000000 --audit-seed 3000000
+```
+
+This estimates 60 separate stage/segment trainings, 98,304 total PPO
+decisions and 1,728 development world episodes (including the two
+action-ablated comparisons per candidate). Only if a development winner
+qualifies are 480 audit/reference world episodes estimated.
+
+For a cheap *nonqualifying* functional smoke test, use `--stage-budgets
+256 --worlds 2 --rollout 64 --epochs 1 --episode-cap 18
+--training-seeds 17 --development-episodes 2 --audit-episodes 2`.
+
+## Interpretation
+
+Even a positive screening result does not prove broad generalization or
+demonstrate independent multi-species coordination: other species remain
+scripted. Increasing the training budget relative to M16f and M16g can
+itself improve learning; therefore the meaningful causal contrast in this
+study is **four cycles versus one cycle at exactly the same larger budget**.
+With only three training seeds, report individual results as well as means.
+Do not open the blind audit for a failed development study, or silently
+promote an underperforming network.
