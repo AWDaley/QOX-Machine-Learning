@@ -22,6 +22,11 @@ from ..entities import Species
 from ..envs.core import QoxCoreEnv
 from ..perception import ACTIONS, FARMER_OBSERVATION_VERSION, features_for, observation_size
 
+FARMER_SCENARIOS = (
+    "agriculture", "refuge", "manure", "farmer_mixed",
+    "farmstead", "farmstead_threat", "farmstead_mixed",
+)
+
 
 def _action_names() -> tuple[str, ...]:
     return tuple(a.to_dict()["kind"] + (f"_{a.dx}_{a.dy}" if a.kind == Kind.MOVE else "")
@@ -60,7 +65,7 @@ class FarmerTrainOptions:
     hidden: int = 64
 
     def __post_init__(self) -> None:
-        if self.scenario not in ("agriculture", "refuge", "manure", "farmer_mixed", "farmstead", "farmstead_threat", "farmstead_mixed"):
+        if self.scenario not in FARMER_SCENARIOS:
             raise ValueError("Unrecognized farmer training scenario")
         if self.steps < 1 or self.max_steps < 1 or self.worlds < 1:
             raise ValueError("Steps, max_steps and worlds must be positive")
@@ -241,7 +246,7 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
     """Frozen-policy evaluation on seeds distinct from training seeds."""
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes/max_steps must be positive")
-    if scenario not in ("agriculture", "refuge", "manure", "farmer_mixed"):
+    if scenario not in FARMER_SCENARIOS:
         raise ValueError("Invalid farmer evaluation scenario")
     if mode not in ("policy", "scripted", "random",
                     "policy_no_fertilize", "policy_no_refuge"):

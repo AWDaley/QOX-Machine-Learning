@@ -56,6 +56,19 @@ def test_farmer_schema_and_training_lab_are_compatible():
         QoxParallelEnv(scenario="farmstead_mixed")
 
 
+def test_all_training_scenarios_can_be_evaluated_without_a_checkpoint():
+    pytest.importorskip("torch")
+    from qox.learning.farmer_ppo import FARMER_SCENARIOS, FarmerTrainOptions, evaluate_farmer
+
+    assert set(FARMER_SCENARIOS) == set(scenarios_for(Species.FARMER, 1))
+    for scenario in FARMER_SCENARIOS:
+        FarmerTrainOptions(scenario=scenario)
+        result = evaluate_farmer(episodes=1, seed=19, scenario=scenario,
+                                 max_steps=2, mode="scripted")
+        assert result["scenario"] == scenario
+        assert len(result["results"]) == 1
+
+
 def test_pairwise_comparison_is_reproducible_without_model_changes(tmp_path):
     torch = pytest.importorskip("torch")
     from qox.learning.farmer_ppo import FarmerPolicy, FarmerTrainOptions, _action_names
