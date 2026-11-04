@@ -73,15 +73,42 @@ class FarmerController:
     def __init__(self, checkpoint: str | Path):
         from .farmer_ppo import load_farmer
         self.model = load_farmer(checkpoint)
+        self._world_identity: int | None = None
+        self._memory: dict[int, object] = {}
+        self._last_tick: dict[int, int] = {}
+
+    def _actor_history(self, world: World, actor_id: int):
+        """Consume only this actor's last completed tick, at most once."""
+        from .farmer_task_memory import FarmerTaskHistory
+
+        identity = id(world)
+        if identity != self._world_identity:
+            self._memory.clear()
+            self._last_tick.clear()
+            self._world_identity = identity
+        if actor_id not in self._memory or world.tick < self._last_tick[actor_id]:
+            self._memory[actor_id] = FarmerTaskHistory()
+            self._last_tick[actor_id] = world.tick
+        last = self._last_tick[actor_id]
+        if world.tick > last:
+            self._memory[actor_id].advance(world.last_events, actor_id,
+                                           steps=world.tick - last)
+            self._last_tick[actor_id] = world.tick
+        return self._memory[actor_id]
 
     def probabilities(self, world: World, actor_id: int) -> list[float]:
         actor = world.actors[actor_id]
         if actor.species != Species.FARMER:
             raise ValueError("FarmerController only controls farmers")
         obs = observe(world, actor)
+        from .farmer_task_memory import farmer_policy_observation
+        history = (self._actor_history(world, actor_id)
+                   if self.model.history_mode != "none" else None)
+        inputs = farmer_policy_observation(obs["observation"],
+                                           self.model.history_mode, history)
         with torch.no_grad():
             distribution, _ = self.model(
-                torch.as_tensor(obs["observation"]).unsqueeze(0),
+                torch.as_tensor(inputs).unsqueeze(0),
                 torch.as_tensor(obs["action_mask"]).unsqueeze(0))
             return distribution.probs.squeeze(0).tolist()
 

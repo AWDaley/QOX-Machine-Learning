@@ -516,3 +516,18 @@ strong KL `2.0` improved mean held-out manure application from **1.47**
 All three KL-2.0 seeds passed the remaining safety/manure/crop-damage gates.
 The blind audit remains unopened and the original model unchanged. See
 [M16j methods and full nine-seed results](docs/M16J_ON_POLICY_FOOD_ANCHOR.md).
+
+## M16k — Farmer task memory and action-chain diagnostics
+
+New optional v2 farmer policies can learn from their own recent, physically
+verified planting, harvesting, fertilizing and depositing events. A matched
+`masked` control retains the identical enlarged network architecture with
+history features set to zero; `events` enables actor-local history. Both
+begin with M4-equivalent action preferences before learning. Legacy v1
+checkpoints and the normal environment observation contract remain unchanged.
+
+Use `qox eval-farmer --chain-diagnostics` to measure real harvest/plant/deposit
+action opportunities without altering behavior. The predeclared M16k study
+holds M16j KL `2.0` and manure credit `0.3` constant while comparing
+`--history-modes masked events`. See
+[M16k experimental protocol](docs/M16K_FARMER_TASK_MEMORY.md).
