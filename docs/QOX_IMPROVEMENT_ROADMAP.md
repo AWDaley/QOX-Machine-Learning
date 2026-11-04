@@ -1,6 +1,6 @@
 # QOX — Recommended Improvement Roadmap (M12–M18)
 
-**Status:** M12–M15 merged; M16 research continuing through M16j, with no
+**Status:** M12–M15 merged; M16 research completed through M16j, with no
 unqualified experimental models promoted. M17–M18 remain planned.
 **Repository:** https://github.com/AWDaley/QOX-Machine-Learning  
 **Baseline:** M11 resizable pixel-art viewer, M10 desktop launcher, M0–M9 simulation and neural-network systems.  
@@ -175,12 +175,17 @@ per collected unit) with no physics/reward change during evaluation. All
 **nine** new candidates failed the same food/manure/safety development gate;
 stronger credit improved manure use *during training* but hurt held-out food
 and did not consistently improve held-out fertilization. See
-[M16i's completed controlled study](M16I_MANURE_CREDIT.md). M16j now tests
+[M16i's completed controlled study](M16I_MANURE_CREDIT.md). M16j tested
 selective frozen-M4 food-skill KL on **current** on-policy PPO states, with
-M16i's manure credit held at 0.3 and a zero-KL control. Keep M4 frozen,
-use predeclared new development seeds, and leave audit closed without
-qualifiers. See [M16j methods](M16J_ON_POLICY_FOOD_ANCHOR.md). Then finish
-M16 replication with
+M16i's manure credit fixed at 0.3 and a zero-KL control. Strong KL 2.0
+reliably increased real held-out manure use across three training seeds
+(mean 3.77 versus M4's 2.15), but all candidates continued to lag M4's
+food delivery (KL-2.0 mean 2.91 versus 3.82). **0/9 qualified**; the audit
+was never opened and M4 remains installed. See
+[M16j's complete results](M16J_ON_POLICY_FOOD_ANCHOR.md). The next focused
+M16k experiment should diagnose and retain entire task-phase sequences
+for harvest and deposit, rather than merely sweeping reward/KL strengths.
+Then finish M16 replication with
 independent partner policies and begin M17
 multi-seed ecological calibration before shipping a performance-focused M18
 release. The original M12 event-visibility foundation is already merged.

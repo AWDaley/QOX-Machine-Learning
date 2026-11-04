@@ -1,7 +1,8 @@
 # M16j — On-policy food-skill retention during manure learning
 
-**Status:** Implementation and controlled M4 study. No automatic policy
-promotion; retain the original farmer unless all predeclared gates pass.
+**Status:** Implemented; controlled nine-network M4 study completed.
+**0/9 development qualifiers.** The reserved blind audit was not opened;
+no policy was promoted, and the original M4 farmer remains the default.
 
 ## Motivation and intervention
 
@@ -62,9 +63,10 @@ separate 3B+ deterministic seed namespace; no held-out seed block is
 used for optimizing teacher targets. Development and audit blocks are
 distinct from M16h's 2.0M/3.0M, M16g's 1.8M/2.8M and M16i's 2.2M/3.2M.
 
-The zero-KL arm should match archived M16i manure-0.3 policy parameter
-tensors for all three training seeds despite a new checkpoint option field.
-Verify this explicitly after running to detect accidental PPO drift.
+The zero-KL arm should follow archived M16i's manure-0.3 *control path*:
+the new KL operation is skipped entirely. Cross-run parameter equality is
+examined below; bit-for-bit equality across separate runtime setups cannot
+be assumed.
 
 ### Reproduction
 
@@ -91,7 +93,76 @@ new destination. Existing experiment paths are intentionally protected.
 - One positive candidate among nine is not broad ecological generalization.
   M4's skillful movement may involve contexts the selective safeguard misses.
 
-## First M4-baseline study
+## Completed first M4-baseline study
 
-*Fill in all nine outcomes, control-weight equality and audit decision after
-the predeclared experiment finishes.*
+All **144 curriculum-stage trainings** and **2,592 development world
+episodes** completed with the budgets and seed blocks declared above. All
+nine candidates were evaluated against the same immutable M4 reference.
+The following are actual safe-world outcomes, not shaped PPO training rewards.
+
+| Food-anchor KL | Training seed | Safe food deposited | Food Δ vs M4 | Safe manure applied | Manure Δ vs M4 | Threat survival |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 (control) | 17 | 2.933 | −0.882 | 3.254 | +1.107 | 0.979 |
+| 0 (control) | 37 | 1.917 | −1.899 | 0.000 | −2.147 | 1.000 |
+| 0 (control) | 59 | 2.933 | −0.882 | 1.169 | −0.977 | 0.979 |
+| 0.5 | 17 | 2.045 | −1.770 | 0.697 | −1.450 | 1.000 |
+| 0.5 | 37 | 2.933 | −0.882 | 1.466 | −0.681 | 0.979 |
+| 0.5 | 59 | 2.955 | −0.861 | 2.554 | +0.407 | 1.000 |
+| 2.0 | 17 | 2.975 | −0.840 | 3.887 | +1.740 | 1.000 |
+| 2.0 | 37 | 2.975 | −0.840 | 4.222 | +2.076 | 1.000 |
+| 2.0 | 59 | 2.766 | −1.050 | 3.199 | +1.053 | 1.000 |
+
+M4's matched safe-world reference was **3.815 food deposited** and
+**2.147 manure applied**; its threat-world survival was **1.000**.
+Average outcome across the three independent training seeds per arm:
+
+| Food-anchor KL | Mean safe food | Mean safe manure | Mean threat survival | Mean last-stage anchor coverage |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 2.594 | 1.474 | 0.986 | 0% |
+| 0.5 | 2.644 | 1.572 | 0.993 | 12.4% |
+| 2.0 | **2.905** | **3.770** | **1.000** | 12.2% |
+
+**Gate result: 0/9 qualified.** With KL 2.0, all three independently
+trained candidates exceeded M4 on held-out manure application, and every
+one passed every *other* food/manure/survival/health/crop-damage gate.
+Each nevertheless deposited less food than M4, failing the required
+`food_storage_improves` check. KL 0.5 had mixed manure outcomes; the control
+also had mixed manure and generally less food. The stronger safeguard
+increased mean held-out food by about **0.311** and manure by **2.295**
+relative to the matched zero-anchor arm, but mean food still lagged M4
+by approximately **0.910**. This is descriptive evidence from only three
+training seeds, not a claim of ecological generalization.
+
+For KL 2.0 seed 37, the matched-case bootstrap 95% intervals were
+**[+1.477, +2.665]** for manure difference and **[−1.236, −0.474]**
+for food difference relative to M4: the gain and the shortfall coexist.
+Last-rollout anchor coverage was only approximately 12% of sampled PPO
+states; this may be insufficient to retain the complete multi-step food
+routine, although coverage alone does not establish causality.
+
+### Control and audit integrity
+
+- SHA-256 of M4 checkpoint was reverified:
+  `5036afd395239049b5b99cef4aec7b99277c118eec705cb185fe3124a77938dd`.
+- Zero-anchor training skips teacher loading and the new loss completely.
+  Against archived M16i manure-0.3 seed 17/37/59 tensors, the maximum
+  absolute differences were **4.47e−8, 5.96e−8, 5.96e−8** respectively;
+  these are tiny cross-run numerical differences, **not bit equality**.
+  Two repeated zero-anchor runs within the current runtime produced
+  bit-identical parameters. No material PPO drift was found.
+- The development report records `development_qualifiers: 0`,
+  `selected_before_audit: null`, `audit: null`, and
+  `eligible_for_manual_review: false`. The audit seed ranges were not
+  evaluated; no checkpoint was installed or promoted.
+
+### Research interpretation and next experiment
+
+On-policy teacher anchoring appears to have helped **transfer actual manure
+use** while modestly retaining more food than an unanchored manure learner.
+The remaining failure is food delivery, not a justification to weaken the
+gate. M16k should diagnose the full farmer work chain—resource navigation,
+manure collection/application, planting, harvesting, carrying, deposit—on
+paired held-out trajectories, then test an explicit short-horizon task-phase
+or goal-memory representation *without* touching world physics or using the
+closed audit for tuning. Keep M4 in service until that complete chain clears
+the original development and single-use audit procedure.

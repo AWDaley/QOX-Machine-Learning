@@ -508,4 +508,11 @@ qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir 
 This preserves M16i's 0.3 manure-credit setting in every arm, compares
 matched PPO budgets, and keeps M4 plus all earlier checkpoints read-only.
 The original food/manure/safety gate, untouched physics and single-use
-blind-audit rules still apply. See [M16j methods and results](docs/M16J_ON_POLICY_FOOD_ANCHOR.md).
+blind-audit rules still apply. In the completed nine-network M4 study,
+strong KL `2.0` improved mean held-out manure application from **1.47**
+(zero-anchor control) to **3.77**, with all three seeds exceeding M4's
+**2.15** manure reference. However, mean safe food deposited was only
+**2.91** versus M4's **3.82**, so **none of the nine candidates qualified**.
+All three KL-2.0 seeds passed the remaining safety/manure/crop-damage gates.
+The blind audit remains unopened and the original model unchanged. See
+[M16j methods and full nine-seed results](docs/M16J_ON_POLICY_FOOD_ANCHOR.md).
