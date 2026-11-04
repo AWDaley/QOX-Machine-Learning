@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .farmer_eval import compare_farmers
 from .farmer_ppo import FarmerTrainOptions, load_farmer, train_farmer
+from .farmer_task_memory import FARMER_HISTORY_MODES
 
 
 STAGES = (("agriculture", 96), ("manure", 96), ("refuge", 96),
@@ -39,6 +40,7 @@ class StagedFarmerOptions:
     interleave_cycles: int = 1
     manure_credit: float = 0.0
     food_anchor_kl: float = 0.0
+    history_mode: str = "none"
 
     def __post_init__(self) -> None:
         seeds = self.training_seeds
@@ -70,6 +72,8 @@ class StagedFarmerOptions:
             raise ValueError("Manure credit must be between 0 and 2")
         if not 0.0 <= self.food_anchor_kl <= 10.0:
             raise ValueError("Food anchor KL must be between 0 and 10")
+        if self.history_mode not in FARMER_HISTORY_MODES:
+            raise ValueError("Unknown farmer task-history mode")
         if not 1 <= self.rehearsal_episodes < 100_000 or self.rehearsal_max_steps < 1:
             raise ValueError("Rehearsal episodes and horizon must be positive")
         # Each comparison evaluates two blocks: safe seeds, then threat seeds
@@ -193,7 +197,8 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                     survival_weight=options.survival_weight if stage_index >= 2 else 1.0,
                     rehearsal_kl=options.rehearsal_kl,
                     manure_credit=options.manure_credit,
-                    food_anchor_kl=options.food_anchor_kl)
+                    food_anchor_kl=options.food_anchor_kl,
+                    history_mode=options.history_mode)
                 if rehearsal is None and not options.food_anchor_kl:
                     result = train_farmer(stage_options, checkpoint, init_checkpoint=previous)
                 else:
@@ -213,6 +218,7 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                     "final_rehearsal_kl": result.get("final_rehearsal_kl", 0.0),
                     "food_anchor_kl": result.get("final_food_anchor_kl", 0.0),
                     "food_anchor_fraction": result.get("final_food_anchor_fraction", 0.0),
+                    "history_mode": options.history_mode,
                     "manure_collected": result.get("manure_collected", 0.0),
                     "manure_applied": result.get("manure_applied", 0.0),
                     "manure_credit_awarded": result.get("manure_credit_awarded", 0.0),

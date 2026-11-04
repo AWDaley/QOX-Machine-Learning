@@ -23,6 +23,8 @@ from ..agents import scripted_actions
 from ..entities import Event, Species
 from ..envs.core import QoxCoreEnv
 from ..perception import ACTIONS, FARMER_OBSERVATION_VERSION, features_for, observation_size
+from .farmer_task_memory import (FARMER_HISTORY_MODES, FARMER_TASK_HISTORY_FEATURES,
+                                 FarmerTaskHistory, farmer_policy_observation)
 
 if TYPE_CHECKING:
     from .farmer_rehearsal import FarmerRehearsalData
@@ -39,9 +41,14 @@ def _action_names() -> tuple[str, ...]:
 
 
 class FarmerPolicy(nn.Module):
-    def __init__(self, hidden: int = 64):
+    def __init__(self, hidden: int = 64, *, history_mode: str = "none"):
         super().__init__()
-        self.encoder = nn.Sequential(nn.Linear(observation_size(Species.FARMER), hidden),
+        if history_mode not in FARMER_HISTORY_MODES:
+            raise ValueError("Unknown farmer task-history mode")
+        self.history_mode = history_mode
+        n_features = (observation_size(Species.FARMER) +
+                      (len(FARMER_TASK_HISTORY_FEATURES) if history_mode != "none" else 0))
+        self.encoder = nn.Sequential(nn.Linear(n_features, hidden),
                                      nn.Tanh(), nn.Linear(hidden, hidden), nn.Tanh())
         self.actor = nn.Linear(hidden, len(ACTIONS[Species.FARMER]))
         self.critic = nn.Linear(hidden, 1)
@@ -50,6 +57,23 @@ class FarmerPolicy(nn.Module):
         features = self.encoder(observations)
         logits = self.actor(features).masked_fill(masks <= 0, -1e9)
         return Categorical(logits=logits), self.critic(features).squeeze(-1)
+
+
+def _expand_m4_farmer(policy: FarmerPolicy, history_mode: str) -> FarmerPolicy:
+    """Create a memory-input clone whose initial action/value outputs equal M4."""
+    if policy.history_mode != "none" or history_mode not in ("masked", "events"):
+        raise ValueError("Only a legacy v1 farmer may be expanded to v2 memory")
+    width = policy.encoder[0].out_features
+    expanded = FarmerPolicy(width, history_mode=history_mode)
+    state = expanded.state_dict()
+    for key, value in policy.state_dict().items():
+        if key == "encoder.0.weight":
+            state[key][:, :value.shape[1]] = value
+            state[key][:, value.shape[1]:] = 0
+        else:
+            state[key] = value
+    expanded.load_state_dict(state)
+    return expanded
 
 
 @dataclass(frozen=True)
@@ -72,6 +96,7 @@ class FarmerTrainOptions:
     rehearsal_kl: float = 0.0
     manure_credit: float = 0.0
     food_anchor_kl: float = 0.0
+    history_mode: str = "none"
 
     def __post_init__(self) -> None:
         if self.scenario not in FARMER_SCENARIOS:
@@ -93,6 +118,8 @@ class FarmerTrainOptions:
             raise ValueError("Manure credit must be between 0 and 2")
         if not 0.0 <= self.food_anchor_kl <= 10.0:
             raise ValueError("Food anchor KL must be between 0 and 10")
+        if self.history_mode not in FARMER_HISTORY_MODES:
+            raise ValueError("Unknown farmer task-history mode")
 
 
 def _fresh_env(scenario: str, max_steps: int) -> QoxCoreEnv:
@@ -143,7 +170,10 @@ def _on_policy_food_anchor(teacher: FarmerPolicy, student: Categorical,
     This is a gradient regularizer, never an order sent to a QOX actor.
     """
     with torch.no_grad():
-        reference, _ = teacher(observations, masks)
+        # An M16k student can see additional actor-local history. The frozen
+        # v1 M4 teacher receives strictly its original sensor features.
+        teacher_inputs = observations[:, :observation_size(Species.FARMER)]
+        reference, _ = teacher(teacher_inputs, masks)
         preference = reference.probs.argmax(dim=1)
         focus = torch.zeros_like(preference, dtype=torch.bool)
         moving = torch.zeros_like(focus)
@@ -195,8 +225,18 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
     # Replay examples have their own RNG so the control and KL-regularized
     # candidates sample identical on-policy actions until their weights diverge.
     replay_rng = torch.Generator().manual_seed(options.seed + 8_000_000_000)
-    model = (load_farmer(init_checkpoint) if init_checkpoint is not None else
-             FarmerPolicy(options.hidden))
+    prior_model = load_farmer(init_checkpoint) if init_checkpoint is not None else None
+    if prior_model is None:
+        model = FarmerPolicy(options.hidden, history_mode=options.history_mode)
+    elif prior_model.history_mode == options.history_mode:
+        model = prior_model
+    elif prior_model.history_mode == "none" and options.history_mode != "none":
+        # Warm-start a v2 memory-capable policy from M4 with an *exactly*
+        # zero-initialized history projection. Before PPO its logits are the
+        # same as M4's for all base observations and legal-action masks.
+        model = _expand_m4_farmer(prior_model, options.history_mode)
+    else:
+        raise ValueError("Initial farmer checkpoint task-history mode mismatch")
     food_teacher = (load_farmer(food_anchor_checkpoint)
                     if options.food_anchor_kl else None)
     if food_teacher is not None:
@@ -206,7 +246,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         raise ValueError("Initial farmer checkpoint hidden size mismatch")
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=options.lr, eps=1e-5)
-    if init_checkpoint is not None:
+    if init_checkpoint is not None and prior_model.history_mode == options.history_mode:
         # A continuation uses the prior optimizer state when available.
         # RNG/rollout trajectories intentionally begin from the new run seed;
         # this is not a bit-identical mid-episode resume.
@@ -220,6 +260,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
     episode_counts = [0] * options.worlds
     states = [env.reset(seed=options.seed + 1009 * i)[0][names[i]]
               for i, env in enumerate(envs)]
+    histories = [FarmerTaskHistory() for _ in envs]
     active_returns = [0.0] * options.worlds
     completed_returns: list[float] = []
     manure_collected = manure_applied = manure_credit_awarded = 0.0
@@ -232,7 +273,9 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
 
         observations, masks, actions, logps, values, rewards, dones = [], [], [], [], [], [], []
         for _ in range(options.rollout // options.worlds):
-            inputs = torch.as_tensor(np.stack([s["observation"] for s in states]),
+            inputs = torch.as_tensor(np.stack([
+                farmer_policy_observation(s["observation"], options.history_mode, histories[i])
+                for i, s in enumerate(states)]),
                                      dtype=torch.float32)
             valid = torch.as_tensor(np.stack([s["action_mask"] for s in states]),
                                     dtype=torch.float32)
@@ -253,6 +296,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                 manure_applied += applied
                 manure_credit_awarded += credit
                 reward += credit
+                histories[i].advance(env.world.last_events, env.name_to_id[names[i]])
                 done = bool(terminated[names[i]] or truncated[names[i]])
                 active_returns[i] += reward
                 step_rewards.append(reward)
@@ -264,6 +308,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                     next_seed = (options.seed + 1009 * i +
                                  100_003 * episode_counts[i])
                     states[i] = env.reset(seed=next_seed)[0][names[i]]
+                    histories[i] = FarmerTaskHistory()
                 else:
                     states[i] = next_obs[names[i]]
             observations.append(inputs)
@@ -275,7 +320,9 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
             dones.append(torch.as_tensor(step_dones, dtype=torch.float32))
 
         with torch.no_grad():
-            last_inputs = torch.as_tensor(np.stack([s["observation"] for s in states]),
+            last_inputs = torch.as_tensor(np.stack([
+                farmer_policy_observation(s["observation"], options.history_mode, histories[i])
+                for i, s in enumerate(states)]),
                                           dtype=torch.float32)
             last_masks = torch.as_tensor(np.stack([s["action_mask"] for s in states]),
                                          dtype=torch.float32)
@@ -314,8 +361,13 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                     replay_indices = torch.multinomial(
                         rehearsal.sampling_weights, len(batch), replacement=True,
                         generator=replay_rng)
-                    student, _ = model(rehearsal.observations[replay_indices],
-                                       rehearsal.masks[replay_indices])
+                    replay_observations = rehearsal.observations[replay_indices]
+                    if model.history_mode != "none":
+                        # Archived teacher demonstrations have v1 features;
+                        # zero history is a neutral, clearly labeled fallback.
+                        replay_observations = nn.functional.pad(
+                            replay_observations, (0, len(FARMER_TASK_HISTORY_FEATURES)))
+                    student, _ = model(replay_observations, rehearsal.masks[replay_indices])
                     teacher = Categorical(probs=rehearsal.teacher_probs[replay_indices])
                     replay_kl = kl_divergence(teacher, student).mean()
                     loss = loss + options.rehearsal_kl * replay_kl
@@ -354,10 +406,14 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    stored_features = (features_for(Species.FARMER) +
+                       (FARMER_TASK_HISTORY_FEATURES if options.history_mode != "none" else ()))
     torch.save({"policy_state": model.state_dict(), "optimizer_state": optimizer.state_dict(),
                 "model_hidden": options.hidden, "species": "farmer",
-                "obs_version": FARMER_OBSERVATION_VERSION,
-                "observation_features": features_for(Species.FARMER),
+                "obs_version": (2 if options.history_mode != "none"
+                                else FARMER_OBSERVATION_VERSION),
+                "task_history_mode": options.history_mode,
+                "observation_features": stored_features,
                 "actions": _action_names(), "options": asdict(options),
                 "completed_steps": steps}, output)
     report = {"checkpoint": str(output), "farmer_steps": steps,
@@ -377,12 +433,18 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
 
 def load_farmer(path: str | Path) -> FarmerPolicy:
     data = torch.load(path, map_location="cpu", weights_only=True)
+    history_mode = data.get("task_history_mode", "none")
+    if history_mode not in FARMER_HISTORY_MODES:
+        raise ValueError("Farmer checkpoint task-history mode mismatch")
+    version = 2 if history_mode != "none" else FARMER_OBSERVATION_VERSION
+    expected_features = (features_for(Species.FARMER) +
+                         (FARMER_TASK_HISTORY_FEATURES if history_mode != "none" else ()))
     if (data.get("species") != "farmer" or
-            data.get("obs_version") != FARMER_OBSERVATION_VERSION or
-            tuple(data.get("observation_features", ())) != features_for(Species.FARMER) or
+            data.get("obs_version") != version or
+            tuple(data.get("observation_features", ())) != expected_features or
             tuple(data.get("actions", ())) != _action_names()):
         raise ValueError("Farmer checkpoint observation/action schema mismatch")
-    model = FarmerPolicy(int(data["model_hidden"]))
+    model = FarmerPolicy(int(data["model_hidden"]), history_mode=history_mode)
     model.load_state_dict(data["policy_state"])
     model.eval()
     return model
@@ -390,7 +452,8 @@ def load_farmer(path: str | Path) -> FarmerPolicy:
 
 def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                     seed: int = 100_000, scenario: str = "agriculture",
-                    max_steps: int = 96, mode: str = "policy") -> dict:
+                    max_steps: int = 96, mode: str = "policy",
+                    chain_diagnostics: bool = False) -> dict:
     """Frozen-policy evaluation on seeds distinct from training seeds."""
     if episodes < 1 or max_steps < 1:
         raise ValueError("episodes/max_steps must be positive")
@@ -404,6 +467,14 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
     model = load_farmer(checkpoint) if mode.startswith("policy") else None
     chooser = np.random.default_rng(seed)
     results = []
+    diagnostic_keys = ("harvest_legal_steps", "harvest_chosen_steps",
+                       "harvest_missed_steps", "fertilize_during_harvest_opportunity",
+                       "ripe_visible_steps", "deposit_legal_steps",
+                       "deposit_chosen_steps", "plant_legal_steps", "plant_chosen_steps")
+    action_indices = {kind: next(i for i, a in enumerate(ACTIONS[Species.FARMER])
+                                 if a.kind == kind)
+                      for kind in (Kind.HARVEST, Kind.DEPOSIT, Kind.FERTILIZE, Kind.PLANT)}
+    ripe_index = features_for(Species.FARMER).index("ripe_seen")
     for episode in range(episodes):
         env = _fresh_env(scenario, max_steps)
         states, _ = env.reset(seed=seed + episode)
@@ -411,6 +482,8 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
         name = _first_farmer(env)
         aid = env.name_to_id[name]
         total_reward, sheltered_steps = 0.0, 0
+        memory = FarmerTaskHistory()
+        diagnostics = dict.fromkeys(diagnostic_keys, 0)
         for _ in range(max_steps):
             state = states[name]
             if mode == "random":
@@ -429,10 +502,30 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                     if action.kind in restricted:
                         mask[index] = 0
                 with torch.no_grad():
-                    dist, _ = model(torch.as_tensor(state["observation"]).unsqueeze(0),
+                    inputs = farmer_policy_observation(state["observation"],
+                                                       model.history_mode, memory)
+                    dist, _ = model(torch.as_tensor(inputs).unsqueeze(0),
                                     torch.as_tensor(mask).unsqueeze(0))
                     choice = int(dist.probs.argmax(dim=1).item())
+            if chain_diagnostics:
+                mask = state["action_mask"]
+                harvest_legal = bool(mask[action_indices[Kind.HARVEST]])
+                deposit_legal = bool(mask[action_indices[Kind.DEPOSIT]])
+                plant_legal = bool(mask[action_indices[Kind.PLANT]])
+                diagnostics["harvest_legal_steps"] += int(harvest_legal)
+                diagnostics["harvest_chosen_steps"] += int(
+                    choice == action_indices[Kind.HARVEST])
+                diagnostics["harvest_missed_steps"] += int(
+                    harvest_legal and choice != action_indices[Kind.HARVEST])
+                diagnostics["fertilize_during_harvest_opportunity"] += int(
+                    harvest_legal and choice == action_indices[Kind.FERTILIZE])
+                diagnostics["ripe_visible_steps"] += int(state["observation"][ripe_index] > 0)
+                diagnostics["deposit_legal_steps"] += int(deposit_legal)
+                diagnostics["deposit_chosen_steps"] += int(choice == action_indices[Kind.DEPOSIT])
+                diagnostics["plant_legal_steps"] += int(plant_legal)
+                diagnostics["plant_chosen_steps"] += int(choice == action_indices[Kind.PLANT])
             states, rewards, terminated, truncated, _ = env.step({name: choice})
+            memory.advance(env.world.last_events, aid)
             total_reward += rewards[name]
             farmer = env.world.actors.get(aid)
             if farmer and farmer.sheltered:
@@ -446,7 +539,7 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
         home = env.world.settlements[0]
         crop_eaten = sum(e.amount for e in env.world.events
                          if e.kind == "graze" and e.detail == "crop")
-        results.append({"seed": seed + episode, "return": round(total_reward, 4),
+        result = {"seed": seed + episode, "return": round(total_reward, 4),
                         "alive": bool(actor), "final_health": round(actor.health, 3) if actor else 0,
                         "harvested": round(totals["harvest"], 3),
                         "deposited": round(totals["deposit"], 3),
@@ -456,10 +549,13 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                         "refuge_entries": sum(e.kind == "enter_refuge" for e in events),
                         "final_home_food": round(home.stored_food, 3),
                         "net_store_change": round(home.stored_food - initial_home_food, 3),
-                        "crop_eaten_by_cows": round(crop_eaten, 3)})
+                        "crop_eaten_by_cows": round(crop_eaten, 3)}
+        if chain_diagnostics:
+            result["chain"] = diagnostics
+        results.append(result)
     def avg(key: str) -> float:
         return round(float(np.mean([row[key] for row in results])), 4)
-    return {"mode": mode, "scenario": scenario, "seed_start": seed,
+    report = {"mode": mode, "scenario": scenario, "seed_start": seed,
             "episodes": episodes, "mean_return": avg("return"),
             "mean_deposited": avg("deposited"), "mean_harvested": avg("harvested"),
             "mean_waste_collected": avg("waste_collected"),
@@ -468,4 +564,9 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
             "mean_crop_eaten_by_cows": avg("crop_eaten_by_cows"),
             "mean_sheltered_steps": avg("sheltered_steps"),
             "mean_final_health": avg("final_health"),
-            "survival_rate": avg("alive"), "results": results}
+              "survival_rate": avg("alive"), "results": results}
+    if chain_diagnostics:
+        report["chain_means"] = {
+            key: round(float(np.mean([row["chain"][key] for row in results])), 4)
+            for key in diagnostic_keys}
+    return report

@@ -72,16 +72,27 @@ class FarmerController:
 
     def __init__(self, checkpoint: str | Path):
         from .farmer_ppo import load_farmer
+        from .farmer_task_memory import FarmerHistoryCache
         self.model = load_farmer(checkpoint)
+        self._memory_cache = FarmerHistoryCache()
+
+    def _actor_history(self, world: World, actor_id: int):
+        """Consume only this actor's last completed tick, at most once."""
+        return self._memory_cache.for_actor(world, actor_id)
 
     def probabilities(self, world: World, actor_id: int) -> list[float]:
         actor = world.actors[actor_id]
         if actor.species != Species.FARMER:
             raise ValueError("FarmerController only controls farmers")
         obs = observe(world, actor)
+        from .farmer_task_memory import farmer_policy_observation
+        history = (self._actor_history(world, actor_id)
+                   if self.model.history_mode != "none" else None)
+        inputs = farmer_policy_observation(obs["observation"],
+                                           self.model.history_mode, history)
         with torch.no_grad():
             distribution, _ = self.model(
-                torch.as_tensor(obs["observation"]).unsqueeze(0),
+                torch.as_tensor(inputs).unsqueeze(0),
                 torch.as_tensor(obs["action_mask"]).unsqueeze(0))
             return distribution.probs.squeeze(0).tolist()
 

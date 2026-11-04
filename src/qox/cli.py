@@ -114,6 +114,9 @@ def parser() -> argparse.ArgumentParser:
                               help="M16j: frozen-M4 KL on current food-task PPO states")
     train_farmer.add_argument("--food-anchor-checkpoint", type=Path,
                               help="M16j: separate immutable teacher for food anchoring")
+    train_farmer.add_argument("--history-mode", choices=("none", "masked", "events"),
+                              default="none",
+                              help="M16k: opt-in v2 farmer local-event memory; masked is control")
     train_farmer.add_argument("--scenario", choices=farmer_scenarios, default="farmer_mixed")
     train_farmer.add_argument("--output", type=Path, default=Path("runs/farmer.pt"))
     for title in ("eval-farmer", "benchmark-farmer"):
@@ -124,6 +127,8 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--max-steps", type=int, default=96)
         cmd.add_argument("--scenario", choices=farmer_scenarios, default="agriculture")
         cmd.add_argument("--mode", choices=("policy", "random", "scripted"), default="policy")
+        cmd.add_argument("--chain-diagnostics", action="store_true",
+                         help="M16k: report legal harvest/deposit opportunities and decisions")
         cmd.add_argument("--report", type=Path)
     farm_compare = sub.add_parser("compare-farmers",
                                   help="M16d paired long-horizon agriculture/refuge screening")
@@ -145,6 +150,8 @@ def parser() -> argparse.ArgumentParser:
                         help="M16i: verified manure training bonus; 0 is control")
     staged.add_argument("--food-anchor-kl", type=float, default=0.0,
                         help="M16j: selectively anchor fresh food-task states to baseline")
+    staged.add_argument("--history-mode", choices=("none", "masked", "events"),
+                        default="none", help="M16k: local-event memory or masked v2 control")
     staged.add_argument("--worlds", type=int, default=4)
     staged.add_argument("--rollout", type=int, default=256)
     staged.add_argument("--epochs", type=int, default=4)
@@ -175,6 +182,8 @@ def parser() -> argparse.ArgumentParser:
                        help="M16i: compare verified manure shaping bonuses; include 0 control")
     sweep.add_argument("--food-anchor-kls", type=float, nargs="+", default=[0.0],
                        help="M16j: compare baseline KL on current food-task states; 0 control")
+    sweep.add_argument("--history-modes", nargs="+", choices=("none", "masked", "events"),
+                       default=["none"], help="M16k: matched v2 masked vs event-memory arms")
     sweep.add_argument("--training-seeds", type=int, nargs="+", default=[17, 37, 59])
     sweep.add_argument("--worlds", type=int, default=4)
     sweep.add_argument("--rollout", type=int, default=256)
@@ -586,6 +595,7 @@ def main(argv: list[str] | None = None) -> int:
             interleave_cycles=tuple(args.interleave_cycles),
             manure_credits=tuple(args.manure_credits),
             food_anchor_kls=tuple(args.food_anchor_kls),
+            history_modes=tuple(args.history_modes),
             training_seeds=tuple(args.training_seeds),
             worlds=args.worlds, rollout=args.rollout, epochs=args.epochs,
             max_steps_override=args.episode_cap,
@@ -622,7 +632,8 @@ def main(argv: list[str] | None = None) -> int:
             rehearsal_max_steps=args.rehearsal_max_steps,
             interleave_cycles=args.interleave_cycles,
             manure_credit=args.manure_credit,
-            food_anchor_kl=args.food_anchor_kl)
+            food_anchor_kl=args.food_anchor_kl,
+            history_mode=args.history_mode)
         report = train_farmer_staged(args.baseline, args.output_dir, options)
         print(json.dumps({"summary": str(args.output_dir / "summary.json"),
                           "training_seeds": args.training_seeds,
@@ -654,7 +665,8 @@ def main(argv: list[str] | None = None) -> int:
                 rollout=args.rollout, max_steps=args.max_steps,
                 scenario=args.scenario, survival_weight=args.survival_weight,
                 manure_credit=args.manure_credit,
-                food_anchor_kl=args.food_anchor_kl), args.output,
+                food_anchor_kl=args.food_anchor_kl,
+                history_mode=args.history_mode), args.output,
                 food_anchor_checkpoint=args.food_anchor_checkpoint)
             print(json.dumps({k: v for k, v in report.items()
                               if k not in ("history", "recent_returns")}, indent=2))
@@ -664,7 +676,9 @@ def main(argv: list[str] | None = None) -> int:
         results = {mode: evaluate_farmer(checkpoint=args.checkpoint,
                                          episodes=args.episodes, seed=args.seed,
                                          max_steps=args.max_steps, scenario=args.scenario,
-                                         mode=mode) for mode in modes}
+                                         mode=mode,
+                                         chain_diagnostics=args.chain_diagnostics)
+                   for mode in modes}
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(json.dumps(results, indent=2), encoding="utf-8")
