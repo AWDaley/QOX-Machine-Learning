@@ -529,5 +529,12 @@ checkpoints and the normal environment observation contract remain unchanged.
 Use `qox eval-farmer --chain-diagnostics` to measure real harvest/plant/deposit
 action opportunities without altering behavior. The predeclared M16k study
 holds M16j KL `2.0` and manure credit `0.3` constant while comparing
-`--history-modes masked events`. See
-[M16k experimental protocol](docs/M16K_FARMER_TASK_MEMORY.md).
+`--history-modes masked events`. Version-2 checkpoints also work in the
+desktop `.qox` model-set load/save and training-continuation flows.
+
+**Completed result:** 0/6 candidates passed the development food gate; no
+blind audit or model promotion occurred. Event history descriptively
+retained more food than an identical-network masked control, but **all six
+learned farmers chose zero planting actions** despite real opportunities;
+the original M4 still plants. The next focus is crop-cycle learning and
+navigation. See [M16k full study and diagnostics](docs/M16K_FARMER_TASK_MEMORY.md).

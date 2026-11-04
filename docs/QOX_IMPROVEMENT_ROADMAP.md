@@ -1,6 +1,6 @@
 # QOX — Recommended Improvement Roadmap (M12–M18)
 
-**Status:** M12–M15 merged; M16j complete and M16k research underway, with no
+**Status:** M12–M15 merged; M16j and M16k studies complete, with no
 unqualified experimental models promoted. M17–M18 remain planned.
 **Repository:** https://github.com/AWDaley/QOX-Machine-Learning  
 **Baseline:** M11 resizable pixel-art viewer, M10 desktop launcher, M0–M9 simulation and neural-network systems.  
@@ -183,11 +183,17 @@ reliably increased real held-out manure use across three training seeds
 food delivery (KL-2.0 mean 2.91 versus 3.82). **0/9 qualified**; the audit
 was never opened and M4 remains installed. See
 [M16j's complete results](M16J_ON_POLICY_FOOD_ANCHOR.md). The next focused
-M16k experiment adds paired diagnostics and actor-local history of verified
+M16k experiment compared actor-local history of verified
 plant/harvest/fertilize/deposit events with a same-architecture masked
-control. M16j traces show planting and visible-ripe crop navigation—not
-deposits—are the sharpest bottlenecks. See
-[M16k's predeclared protocol](M16K_FARMER_TASK_MEMORY.md).
+control across six matched trained policies (96 training stages). The
+event-memory arm descriptively preserved more food and threatened health,
+but **0/6 passed** the food-development gate. Independent action-chain
+diagnostics showed **zero chosen planting actions across all six** despite
+legal planting opportunities; the original M4 plants regularly. No audit
+was opened or model promoted. The next M16l hypothesis should target
+verified crop-cycle credit and planting/navigation skill rather than
+untargeted input-memory tuning. See
+[M16k's full study](M16K_FARMER_TASK_MEMORY.md).
 Then finish M16 replication with
 independent partner policies and begin M17
 multi-seed ecological calibration before shipping a performance-focused M18

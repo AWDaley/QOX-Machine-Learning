@@ -261,7 +261,10 @@ def train_role(species: Species, start: Path, destination: Path, *,
         report = train_cow(TrainOptions(**common, cow_calls=version == 2),
                            destination, init_checkpoint=start, **hooks)
     elif species == Species.FARMER:
-        report = train_farmer(FarmerTrainOptions(**common), destination,
+        from .learning.farmer_ppo import load_farmer
+        history_mode = load_farmer(start).history_mode
+        report = train_farmer(FarmerTrainOptions(**common, history_mode=history_mode),
+                              destination,
                               init_checkpoint=start, **hooks)
     elif species == Species.NOMAD:
         report = train_nomad(NomadTrainOptions(**common, nomad_v2=version == 2),
@@ -288,7 +291,9 @@ class MultiPolicyController:
 
     def __init__(self, session: ModelSession, *, sample_actions: bool = True,
                  festival_assist: bool = False):
+        from .learning.farmer_task_memory import FarmerHistoryCache
         self.models = {species: load_policy(species, session.path(species)) for species in ROLES}
+        self._farmer_history = FarmerHistoryCache()
         self.sample_actions = sample_actions
         self.festival_assist = festival_assist
 
@@ -300,8 +305,13 @@ class MultiPolicyController:
         observed = observe(world, actor,
                            cow_calls=bool(getattr(model, "cow_calls", False)),
                            nomad_v2=bool(getattr(model, "nomad_v2", False)))
+        inputs = observed["observation"]
+        if actor.species == Species.FARMER and model.history_mode != "none":
+            from .learning.farmer_task_memory import farmer_policy_observation
+            inputs = farmer_policy_observation(inputs, model.history_mode,
+                                               self._farmer_history.for_actor(world, actor_id))
         with torch.no_grad():
-            distribution, _ = model(torch.as_tensor(observed["observation"]).unsqueeze(0),
+            distribution, _ = model(torch.as_tensor(inputs).unsqueeze(0),
                                     torch.as_tensor(observed["action_mask"]).unsqueeze(0))
         return distribution.probs.squeeze(0).tolist()
 

@@ -49,6 +49,13 @@ def test_verified_memory_ignores_other_actors_failed_actions_and_expires():
     assert memory.features()[5] == 1
     with pytest.raises(ValueError, match="at least one"):
         memory.advance([], 5, steps=0)
+    resumed = FarmerTaskHistory.from_recorded_events(
+        [Event(2, "plant", 5, 0.3), Event(2, "harvest", 8, 3),
+         Event(3, "deposit", 5, 1.5), Event(5, "fertilize", 5, 1)],
+        actor_id=5, through_tick=3)
+    assert resumed.tick == 3 and resumed.last_kind == "deposit"
+    assert resumed.features()[FARMER_TASK_HISTORY_FEATURES.index("recent_deposit")] == 0.25
+    assert resumed.features()[FARMER_TASK_HISTORY_FEATURES.index("recent_fertilize")] == 0
 
 
 def test_m4_upgrade_is_neutral_and_v2_checkpoint_strict(tmp_path):
@@ -116,6 +123,7 @@ def test_sweep_two_modes_budget_and_cli_noncreating_dry_run(tmp_path, capsys):
 def test_real_event_memory_training_evaluation_controller_and_diagnostics(tmp_path):
     torch = pytest.importorskip("torch")
     from qox.cli import main
+    from qox.desktop_models import ModelSession, MultiPolicyController, train_role
     from qox.envs.core import QoxCoreEnv
     from qox.learning.farmer_ppo import evaluate_farmer, load_farmer
     from qox.learning.inference import FarmerController
@@ -151,11 +159,26 @@ def test_real_event_memory_training_evaluation_controller_and_diagnostics(tmp_pa
     assert controller._actor_history(env.world, actor.id).tick == 0
     env.world.tick += 1
     env.world.last_events = [Event(env.world.tick, "plant", actor.id, 0.3)]
+    env.world.events.extend(env.world.last_events)
     controller.probabilities(env.world, actor.id)
     controller.probabilities(env.world, actor.id)
     history = controller._actor_history(env.world, actor.id)
     assert history.tick == 1
     assert history.last_kind == "plant"
+    session = ModelSession.fresh(tmp_path / "desktop-session", seed=72)
+    session.replace(Species.FARMER, v2)
+    desktop = MultiPolicyController(session, sample_actions=False)
+    assert len(desktop.probabilities(env.world, actor.id)) == len(ACTIONS[Species.FARMER])
+    assert len(desktop.probabilities(env.world, actor.id)) == len(ACTIONS[Species.FARMER])
+    assert desktop._farmer_history.for_actor(env.world, actor.id).tick == 1
+    assert desktop._farmer_history.for_actor(env.world, actor.id).last_kind == "plant"
+    bundle = session.save(tmp_path / "task-memory.qox")
+    restored = ModelSession.load(bundle, tmp_path / "restored")
+    assert restored.status[Species.FARMER].observation_version == 2
+    continuation = tmp_path / "continued.pt"
+    train_role(Species.FARMER, v2, continuation, steps=256,
+               scenario="agriculture", seed=107)
+    assert load_farmer(continuation).history_mode == "events"
     assert baseline.read_bytes() == original
 
 

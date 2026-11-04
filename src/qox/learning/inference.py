@@ -72,29 +72,13 @@ class FarmerController:
 
     def __init__(self, checkpoint: str | Path):
         from .farmer_ppo import load_farmer
+        from .farmer_task_memory import FarmerHistoryCache
         self.model = load_farmer(checkpoint)
-        self._world_identity: int | None = None
-        self._memory: dict[int, object] = {}
-        self._last_tick: dict[int, int] = {}
+        self._memory_cache = FarmerHistoryCache()
 
     def _actor_history(self, world: World, actor_id: int):
         """Consume only this actor's last completed tick, at most once."""
-        from .farmer_task_memory import FarmerTaskHistory
-
-        identity = id(world)
-        if identity != self._world_identity:
-            self._memory.clear()
-            self._last_tick.clear()
-            self._world_identity = identity
-        if actor_id not in self._memory or world.tick < self._last_tick[actor_id]:
-            self._memory[actor_id] = FarmerTaskHistory()
-            self._last_tick[actor_id] = world.tick
-        last = self._last_tick[actor_id]
-        if world.tick > last:
-            self._memory[actor_id].advance(world.last_events, actor_id,
-                                           steps=world.tick - last)
-            self._last_tick[actor_id] = world.tick
-        return self._memory[actor_id]
+        return self._memory_cache.for_actor(world, actor_id)
 
     def probabilities(self, world: World, actor_id: int) -> list[float]:
         actor = world.actors[actor_id]
