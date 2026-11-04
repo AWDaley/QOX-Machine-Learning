@@ -71,6 +71,7 @@ class FarmerTrainOptions:
     survival_weight: float = 1.0
     rehearsal_kl: float = 0.0
     manure_credit: float = 0.0
+    food_anchor_kl: float = 0.0
 
     def __post_init__(self) -> None:
         if self.scenario not in FARMER_SCENARIOS:
@@ -90,6 +91,8 @@ class FarmerTrainOptions:
             raise ValueError("Farmer rehearsal KL weight must be between 0 and 10")
         if not 0.0 <= self.manure_credit <= 2.0:
             raise ValueError("Manure credit must be between 0 and 2")
+        if not 0.0 <= self.food_anchor_kl <= 10.0:
+            raise ValueError("Food anchor KL must be between 0 and 10")
 
 
 def _fresh_env(scenario: str, max_steps: int) -> QoxCoreEnv:
@@ -129,13 +132,44 @@ def _manure_event_credit(events: Iterable[Event], farmer_id: int,
     return collected, applied, strength * (applied + 0.2 * collected)
 
 
+def _on_policy_food_anchor(teacher: FarmerPolicy, student: Categorical,
+                           observations: torch.Tensor,
+                           masks: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Anchor food-critical *current* states to the frozen original farmer.
+
+    M16g instead rehearsed fixed old states. Here the baseline is queried on
+    the learner's actual PPO observations, and only when its preferred legal
+    action grows/stores food or navigates with substantial harvested food.
+    This is a gradient regularizer, never an order sent to a QOX actor.
+    """
+    with torch.no_grad():
+        reference, _ = teacher(observations, masks)
+        preference = reference.probs.argmax(dim=1)
+        focus = torch.zeros_like(preference, dtype=torch.bool)
+        moving = torch.zeros_like(focus)
+        for index, action in enumerate(ACTIONS[Species.FARMER]):
+            if action.kind in (Kind.PLANT, Kind.HARVEST, Kind.DEPOSIT):
+                focus |= preference == index
+            elif action.kind == Kind.MOVE:
+                moving |= preference == index
+        # The legacy farmer observes carried_food / 10. A value of 0.25
+        # means at least 2.5 units, above the initial seed-grain allowance.
+        inventory = observations[:, features_for(Species.FARMER).index("carried_food")]
+        focus |= moving & (inventory >= 0.25)
+    divergence = kl_divergence(reference, student)
+    return (divergence * focus.to(divergence.dtype)).mean(), focus.float().mean()
+
+
 def train_farmer(options: FarmerTrainOptions, output: str | Path,
                  init_checkpoint: str | Path | None = None, *,
                  rehearsal: FarmerRehearsalData | None = None,
+                 food_anchor_checkpoint: str | Path | None = None,
                  progress_callback=None, cancel_requested=None) -> dict:
     """Perform PPO updates for at least the requested number of farmer actions."""
     if options.rehearsal_kl and rehearsal is None:
         raise ValueError("Rehearsal KL requires frozen teacher demonstrations")
+    if options.food_anchor_kl and food_anchor_checkpoint is None:
+        raise ValueError("Food anchor KL requires an immutable teacher checkpoint")
     if options.rehearsal_kl and rehearsal is not None:
         n_examples = rehearsal.observations.shape[0]
         count = len(ACTIONS[Species.FARMER])
@@ -163,6 +197,11 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
     replay_rng = torch.Generator().manual_seed(options.seed + 8_000_000_000)
     model = (load_farmer(init_checkpoint) if init_checkpoint is not None else
              FarmerPolicy(options.hidden))
+    food_teacher = (load_farmer(food_anchor_checkpoint)
+                    if options.food_anchor_kl else None)
+    if food_teacher is not None:
+        food_teacher.eval()
+        food_teacher.requires_grad_(False)
     if model.encoder[0].out_features != options.hidden:
         raise ValueError("Initial farmer checkpoint hidden size mismatch")
     model.train()
@@ -262,6 +301,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         n = xs.shape[0]
         last_loss = 0.0
         last_rehearsal_kl = 0.0
+        food_anchor_penalty = food_anchor_coverage = 0.0
         for _ in range(options.epochs):
             for batch in torch.randperm(n).split(options.minibatch):
                 distribution, predicted = model(xs[batch], ms[batch])
@@ -280,15 +320,25 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                     replay_kl = kl_divergence(teacher, student).mean()
                     loss = loss + options.rehearsal_kl * replay_kl
                     last_rehearsal_kl = float(replay_kl.detach())
+                if food_teacher is not None:
+                    anchor_kl, anchor_fraction = _on_policy_food_anchor(
+                        food_teacher, distribution, xs[batch], ms[batch])
+                    loss = loss + options.food_anchor_kl * anchor_kl
+                    food_anchor_penalty += float(anchor_kl.detach()) * len(batch)
+                    food_anchor_coverage += float(anchor_fraction.detach()) * len(batch)
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                 optimizer.step()
                 last_loss = float(loss.detach())
         steps += n
+        mean_food_anchor_kl = food_anchor_penalty / (options.epochs * n)
+        mean_food_anchor_fraction = food_anchor_coverage / (options.epochs * n)
         history.append({"farmer_steps": steps, "completed_episodes": len(completed_returns),
                         "loss": round(last_loss, 5),
                         "rehearsal_kl": round(last_rehearsal_kl, 6),
+                        "food_anchor_kl": round(mean_food_anchor_kl, 6),
+                        "food_anchor_fraction": round(mean_food_anchor_fraction, 6),
                         "manure_collected": round(manure_collected, 4),
                         "manure_applied": round(manure_applied, 4),
                         "manure_credit_awarded": round(manure_credit_awarded, 4),
@@ -313,6 +363,8 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
     report = {"checkpoint": str(output), "farmer_steps": steps,
               "completed_episodes": len(completed_returns),
               "final_rehearsal_kl": round(last_rehearsal_kl, 6),
+              "final_food_anchor_kl": round(mean_food_anchor_kl, 6),
+              "final_food_anchor_fraction": round(mean_food_anchor_fraction, 6),
               "manure_collected": round(manure_collected, 4),
               "manure_applied": round(manure_applied, 4),
               "manure_credit_awarded": round(manure_credit_awarded, 4),
