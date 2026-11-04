@@ -38,6 +38,7 @@ class StagedFarmerOptions:
     rehearsal_max_steps: int = 96
     interleave_cycles: int = 1
     manure_credit: float = 0.0
+    food_anchor_kl: float = 0.0
 
     def __post_init__(self) -> None:
         seeds = self.training_seeds
@@ -67,6 +68,8 @@ class StagedFarmerOptions:
             raise ValueError("Rehearsal KL must be between 0 and 10")
         if not 0.0 <= self.manure_credit <= 2.0:
             raise ValueError("Manure credit must be between 0 and 2")
+        if not 0.0 <= self.food_anchor_kl <= 10.0:
+            raise ValueError("Food anchor KL must be between 0 and 10")
         if not 1 <= self.rehearsal_episodes < 100_000 or self.rehearsal_max_steps < 1:
             raise ValueError("Rehearsal episodes and horizon must be positive")
         # Each comparison evaluates two blocks: safe seeds, then threat seeds
@@ -189,12 +192,18 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                     scenario=scenario, hidden=hidden,
                     survival_weight=options.survival_weight if stage_index >= 2 else 1.0,
                     rehearsal_kl=options.rehearsal_kl,
-                    manure_credit=options.manure_credit)
-                if rehearsal is None:
+                    manure_credit=options.manure_credit,
+                    food_anchor_kl=options.food_anchor_kl)
+                if rehearsal is None and not options.food_anchor_kl:
                     result = train_farmer(stage_options, checkpoint, init_checkpoint=previous)
                 else:
-                    result = train_farmer(stage_options, checkpoint, init_checkpoint=previous,
-                                          rehearsal=rehearsal)
+                    kwargs = {}
+                    if rehearsal is not None:
+                        kwargs["rehearsal"] = rehearsal
+                    if options.food_anchor_kl:
+                        kwargs["food_anchor_checkpoint"] = baseline
+                    result = train_farmer(stage_options, checkpoint,
+                                          init_checkpoint=previous, **kwargs)
                 stage_records.append({
                     "cycle": cycle + 1, "scenario": scenario, "seed": stage_seed,
                     "checkpoint": str(checkpoint), "checkpoint_sha256": _sha(checkpoint),
@@ -202,6 +211,8 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                     "survival_weight": stage_options.survival_weight,
                     "rehearsal_kl": stage_options.rehearsal_kl,
                     "final_rehearsal_kl": result.get("final_rehearsal_kl", 0.0),
+                    "food_anchor_kl": result.get("final_food_anchor_kl", 0.0),
+                    "food_anchor_fraction": result.get("final_food_anchor_fraction", 0.0),
                     "manure_collected": result.get("manure_collected", 0.0),
                     "manure_applied": result.get("manure_applied", 0.0),
                     "manure_credit_awarded": result.get("manure_credit_awarded", 0.0),

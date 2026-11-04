@@ -490,3 +490,22 @@ M4-controlled study, stronger credit increased actual fertilizer use during
 training, but did not reliably transfer to held-out farms and reduced food
 production. **None of nine candidates qualified**; the audit was not opened
 and the installed model remains unchanged.
+
+## M16j — On-policy food-task retention during manure learning
+
+The farmer trainer can now selectively anchor its policy to a **frozen M4
+teacher on the learner's current observations** using `--food-anchor-kl`.
+Only states where M4 prefers planting, harvesting, depositing, or moving
+while carrying substantial food receive this KL penalty. No scripted
+teacher action is executed; the food safeguard affects training gradients
+only. Unlike M16g's fixed rehearsal set, these are real on-policy PPO
+states that change as the learner changes.
+
+```powershell
+qox sweep-farmers --baseline checkpoints/baseline_farmer_M4_32k.pt --output-dir runs/m16j_001 --weights 3 --stage-budgets 4096 --interleave-cycles 4 --manure-credits 0.3 --food-anchor-kls 0 0.5 2 --epochs 2 --training-seeds 17 37 59 --development-episodes 48 --audit-episodes 48 --development-seed 2400000 --audit-seed 3400000 --dry-run
+```
+
+This preserves M16i's 0.3 manure-credit setting in every arm, compares
+matched PPO budgets, and keeps M4 plus all earlier checkpoints read-only.
+The original food/manure/safety gate, untouched physics and single-use
+blind-audit rules still apply. See [M16j methods and results](docs/M16J_ON_POLICY_FOOD_ANCHOR.md).

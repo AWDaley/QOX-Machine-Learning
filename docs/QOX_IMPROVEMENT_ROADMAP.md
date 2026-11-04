@@ -1,6 +1,6 @@
 # QOX — Recommended Improvement Roadmap (M12–M18)
 
-**Status:** M12–M15 merged; M16 research evaluated through M16i, with no
+**Status:** M12–M15 merged; M16 research continuing through M16j, with no
 unqualified experimental models promoted. M17–M18 remain planned.
 **Repository:** https://github.com/AWDaley/QOX-Machine-Learning  
 **Baseline:** M11 resizable pixel-art viewer, M10 desktop launcher, M0–M9 simulation and neural-network systems.  
@@ -175,10 +175,12 @@ per collected unit) with no physics/reward change during evaluation. All
 **nine** new candidates failed the same food/manure/safety development gate;
 stronger credit improved manure use *during training* but hurt held-out food
 and did not consistently improve held-out fertilization. See
-[M16i's completed controlled study](M16I_MANURE_CREDIT.md). Next: investigate
-food-production retention during on-policy learning and multi-step task
-memory/credit; keep M4 frozen, predeclare new development seeds, and hold
-the blind audit closed without qualifiers. Then finish M16 replication with
+[M16i's completed controlled study](M16I_MANURE_CREDIT.md). M16j now tests
+selective frozen-M4 food-skill KL on **current** on-policy PPO states, with
+M16i's manure credit held at 0.3 and a zero-KL control. Keep M4 frozen,
+use predeclared new development seeds, and leave audit closed without
+qualifiers. See [M16j methods](M16J_ON_POLICY_FOOD_ANCHOR.md). Then finish
+M16 replication with
 independent partner policies and begin M17
 multi-seed ecological calibration before shipping a performance-focused M18
 release. The original M12 event-visibility foundation is already merged.
