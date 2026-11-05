@@ -538,3 +538,26 @@ retained more food than an identical-network masked control, but **all six
 learned farmers chose zero planting actions** despite real opportunities;
 the original M4 still plants. The next focus is crop-cycle learning and
 navigation. See [M16k full study and diagnostics](docs/M16K_FARMER_TASK_MEMORY.md).
+
+## M16l — Verified crop-cycle reward experiment
+
+M16l adds an optional **training-only** crop-cycle credit. The per-farmer,
+per-episode ledger rewards only successful planting and later harvesting
+from that farmer's planted plots, followed by delivery of the resulting
+food. Immediate planting credit is limited to two successful plants per
+episode; consumed seed grain, carried food eaten and already deposited
+food cannot be counted twice. Neural action selection, legal masks,
+physics, public observations, and the production M4 baseline are unchanged.
+
+Use `qox train-farmer --crop-cycle-credit 1` for a local training run, or
+`qox sweep-farmers --crop-cycle-credits 0 1` to compare the zero-credit
+control and shaped farmer with equal budgets.
+
+**Completed result:** 96 training segments, 0/6 development qualifiers,
+no blind audit or model promotion. The credit arm increased physical
+planting events **during stochastic training** (523 versus 432 across
+three seeds), yet every frozen candidate still chose **zero planting**
+in independent deterministic tests. Both candidate arms remained below
+M4 on food; the treatment also hurt manure performance. Subsequent
+diagnostics show that a plant action sometimes ranks second, but not first.
+See [M16l full protocol, results and next hypothesis](docs/M16L_VERIFIED_CROP_CYCLE.md).

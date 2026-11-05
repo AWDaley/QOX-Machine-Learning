@@ -110,6 +110,8 @@ def parser() -> argparse.ArgumentParser:
                               help="Scale verified injury/death penalties in PPO only")
     train_farmer.add_argument("--manure-credit", type=float, default=0.0,
                               help="M16i: training-only reward per useful manure unit applied")
+    train_farmer.add_argument("--crop-cycle-credit", type=float, default=0.0,
+                              help="M16l: training bonus for verified planting and owned crop harvest/deposit")
     train_farmer.add_argument("--food-anchor-kl", type=float, default=0.0,
                               help="M16j: frozen-M4 KL on current food-task PPO states")
     train_farmer.add_argument("--food-anchor-checkpoint", type=Path,
@@ -148,6 +150,8 @@ def parser() -> argparse.ArgumentParser:
                         help="M16h: alternate all four on-policy curricula this many times")
     staged.add_argument("--manure-credit", type=float, default=0.0,
                         help="M16i: verified manure training bonus; 0 is control")
+    staged.add_argument("--crop-cycle-credit", type=float, default=0.0,
+                        help="M16l: verified crop-cycle training bonus; 0 is control")
     staged.add_argument("--food-anchor-kl", type=float, default=0.0,
                         help="M16j: selectively anchor fresh food-task states to baseline")
     staged.add_argument("--history-mode", choices=("none", "masked", "events"),
@@ -180,6 +184,8 @@ def parser() -> argparse.ArgumentParser:
                        help="M16h: 1 is sequential control; 2–8 alternate all four tasks")
     sweep.add_argument("--manure-credits", type=float, nargs="+", default=[0.0],
                        help="M16i: compare verified manure shaping bonuses; include 0 control")
+    sweep.add_argument("--crop-cycle-credits", type=float, nargs="+", default=[0.0],
+                       help="M16l: compare verified crop-cycle shaping; include 0 control")
     sweep.add_argument("--food-anchor-kls", type=float, nargs="+", default=[0.0],
                        help="M16j: compare baseline KL on current food-task states; 0 control")
     sweep.add_argument("--history-modes", nargs="+", choices=("none", "masked", "events"),
@@ -594,6 +600,7 @@ def main(argv: list[str] | None = None) -> int:
             rehearsal_kls=tuple(args.rehearsal_kls),
             interleave_cycles=tuple(args.interleave_cycles),
             manure_credits=tuple(args.manure_credits),
+            crop_cycle_credits=tuple(args.crop_cycle_credits),
             food_anchor_kls=tuple(args.food_anchor_kls),
             history_modes=tuple(args.history_modes),
             training_seeds=tuple(args.training_seeds),
@@ -632,6 +639,7 @@ def main(argv: list[str] | None = None) -> int:
             rehearsal_max_steps=args.rehearsal_max_steps,
             interleave_cycles=args.interleave_cycles,
             manure_credit=args.manure_credit,
+            crop_cycle_credit=args.crop_cycle_credit,
             food_anchor_kl=args.food_anchor_kl,
             history_mode=args.history_mode)
         report = train_farmer_staged(args.baseline, args.output_dir, options)
@@ -665,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
                 rollout=args.rollout, max_steps=args.max_steps,
                 scenario=args.scenario, survival_weight=args.survival_weight,
                 manure_credit=args.manure_credit,
+                crop_cycle_credit=args.crop_cycle_credit,
                 food_anchor_kl=args.food_anchor_kl,
                 history_mode=args.history_mode), args.output,
                 food_anchor_checkpoint=args.food_anchor_checkpoint)

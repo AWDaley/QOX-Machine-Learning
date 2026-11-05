@@ -23,6 +23,7 @@ from ..agents import scripted_actions
 from ..entities import Event, Species
 from ..envs.core import QoxCoreEnv
 from ..perception import ACTIONS, FARMER_OBSERVATION_VERSION, features_for, observation_size
+from .farmer_crop_cycle import FarmerCropCycleLedger
 from .farmer_task_memory import (FARMER_HISTORY_MODES, FARMER_TASK_HISTORY_FEATURES,
                                  FarmerTaskHistory, farmer_policy_observation)
 
@@ -95,6 +96,7 @@ class FarmerTrainOptions:
     survival_weight: float = 1.0
     rehearsal_kl: float = 0.0
     manure_credit: float = 0.0
+    crop_cycle_credit: float = 0.0
     food_anchor_kl: float = 0.0
     history_mode: str = "none"
 
@@ -116,6 +118,8 @@ class FarmerTrainOptions:
             raise ValueError("Farmer rehearsal KL weight must be between 0 and 10")
         if not 0.0 <= self.manure_credit <= 2.0:
             raise ValueError("Manure credit must be between 0 and 2")
+        if not 0.0 <= self.crop_cycle_credit <= 2.0:
+            raise ValueError("Crop-cycle credit must be between 0 and 2")
         if not 0.0 <= self.food_anchor_kl <= 10.0:
             raise ValueError("Food anchor KL must be between 0 and 10")
         if self.history_mode not in FARMER_HISTORY_MODES:
@@ -261,9 +265,11 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
     states = [env.reset(seed=options.seed + 1009 * i)[0][names[i]]
               for i, env in enumerate(envs)]
     histories = [FarmerTaskHistory() for _ in envs]
+    crop_ledgers = [FarmerCropCycleLedger() for _ in envs]
     active_returns = [0.0] * options.worlds
     completed_returns: list[float] = []
     manure_collected = manure_applied = manure_credit_awarded = 0.0
+    crops_planted = own_crops_harvested = own_crop_food_deposited = crop_cycle_credit_awarded = 0.0
     steps = 0
     history = []
     while steps < options.steps:
@@ -296,6 +302,14 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                 manure_applied += applied
                 manure_credit_awarded += credit
                 reward += credit
+                crop = crop_ledgers[i].observe(
+                    env.world.last_events, env.name_to_id[names[i]],
+                    options.crop_cycle_credit)
+                crops_planted += crop.planted
+                own_crops_harvested += crop.harvested_from_own_plant
+                own_crop_food_deposited += crop.deposited_from_own_harvest
+                crop_cycle_credit_awarded += crop.training_bonus
+                reward += crop.training_bonus
                 histories[i].advance(env.world.last_events, env.name_to_id[names[i]])
                 done = bool(terminated[names[i]] or truncated[names[i]])
                 active_returns[i] += reward
@@ -309,6 +323,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                                  100_003 * episode_counts[i])
                     states[i] = env.reset(seed=next_seed)[0][names[i]]
                     histories[i] = FarmerTaskHistory()
+                    crop_ledgers[i] = FarmerCropCycleLedger()
                 else:
                     states[i] = next_obs[names[i]]
             observations.append(inputs)
@@ -394,6 +409,10 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                         "manure_collected": round(manure_collected, 4),
                         "manure_applied": round(manure_applied, 4),
                         "manure_credit_awarded": round(manure_credit_awarded, 4),
+                        "crops_planted": int(crops_planted),
+                        "own_crops_harvested": round(own_crops_harvested, 4),
+                        "own_crop_food_deposited": round(own_crop_food_deposited, 4),
+                        "crop_cycle_credit_awarded": round(crop_cycle_credit_awarded, 4),
                         "mean_recent_return": round(float(np.mean(completed_returns[-30:])), 4)
                         if completed_returns else None})
         if progress_callback is not None:
@@ -424,6 +443,10 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
               "manure_collected": round(manure_collected, 4),
               "manure_applied": round(manure_applied, 4),
               "manure_credit_awarded": round(manure_credit_awarded, 4),
+              "crops_planted": int(crops_planted),
+              "own_crops_harvested": round(own_crops_harvested, 4),
+              "own_crop_food_deposited": round(own_crop_food_deposited, 4),
+              "crop_cycle_credit_awarded": round(crop_cycle_credit_awarded, 4),
               "rehearsal": rehearsal.metadata if options.rehearsal_kl and rehearsal else None,
               "recent_returns": completed_returns[-30:], "history": history}
     output.with_suffix(".metrics.json").write_text(json.dumps(report, indent=2),
@@ -470,7 +493,8 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
     diagnostic_keys = ("harvest_legal_steps", "harvest_chosen_steps",
                        "harvest_missed_steps", "fertilize_during_harvest_opportunity",
                        "ripe_visible_steps", "deposit_legal_steps",
-                       "deposit_chosen_steps", "plant_legal_steps", "plant_chosen_steps")
+                       "deposit_chosen_steps", "plant_legal_steps", "plant_chosen_steps",
+                       "plant_top2_legal_steps", "plant_probability_legal_sum")
     action_indices = {kind: next(i for i, a in enumerate(ACTIONS[Species.FARMER])
                                  if a.kind == kind)
                       for kind in (Kind.HARVEST, Kind.DEPOSIT, Kind.FERTILIZE, Kind.PLANT)}
@@ -524,6 +548,14 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                 diagnostics["deposit_chosen_steps"] += int(choice == action_indices[Kind.DEPOSIT])
                 diagnostics["plant_legal_steps"] += int(plant_legal)
                 diagnostics["plant_chosen_steps"] += int(choice == action_indices[Kind.PLANT])
+                if plant_legal and model is not None:
+                    # Descriptive probability inspection only: the policy's
+                    # deterministic argmax choice above remains untouched.
+                    probs = dist.probs[0]
+                    diagnostics["plant_probability_legal_sum"] += float(
+                        probs[action_indices[Kind.PLANT]].item())
+                    diagnostics["plant_top2_legal_steps"] += int(
+                        action_indices[Kind.PLANT] in probs.topk(2).indices.tolist())
             states, rewards, terminated, truncated, _ = env.step({name: choice})
             memory.advance(env.world.last_events, aid)
             total_reward += rewards[name]
@@ -569,4 +601,8 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
         report["chain_means"] = {
             key: round(float(np.mean([row["chain"][key] for row in results])), 4)
             for key in diagnostic_keys}
+        total_legal = sum(row["chain"]["plant_legal_steps"] for row in results)
+        report["plant_probability_when_legal"] = (
+            round(sum(row["chain"]["plant_probability_legal_sum"] for row in results) /
+                  total_legal, 6) if model is not None and total_legal else None)
     return report
