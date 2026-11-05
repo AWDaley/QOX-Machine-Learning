@@ -102,3 +102,5 @@ jobs:
       - run: qox sweep-farmers --baseline runs/ci-farmer.pt --output-dir runs/ci-m16j --weights 3 --stage-budgets 256 --interleave-cycles 4 --manure-credits 0.3 --food-anchor-kls 0 0.5 --training-seeds 17 --worlds 2 --rollout 64 --epochs 1 --episode-cap 18 --development-episodes 2 --audit-episodes 2
       - run: python -m pytest -q tests/test_m16k_farmer_task_memory.py
       - run: qox sweep-farmers --baseline runs/ci-farmer.pt --output-dir runs/ci-m16k --weights 3 --stage-budgets 256 --interleave-cycles 4 --manure-credits 0.3 --food-anchor-kls 2 --history-modes masked events --training-seeds 17 --worlds 2 --rollout 64 --epochs 1 --episode-cap 18 --development-episodes 2 --audit-episodes 2
+      - run: python -m pytest -q tests/test_m16l_crop_cycle_credit.py
+      - run: qox sweep-farmers --baseline runs/ci-farmer.pt --output-dir runs/ci-m16l --weights 3 --stage-budgets 256 --interleave-cycles 4 --manure-credits 0.3 --food-anchor-kls 2 --crop-cycle-credits 0 1 --training-seeds 17 --worlds 2 --rollout 64 --epochs 1 --episode-cap 18 --development-episodes 2 --audit-episodes 2

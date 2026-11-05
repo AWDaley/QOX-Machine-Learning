@@ -1,6 +1,6 @@
 # QOX — Recommended Improvement Roadmap (M12–M18)
 
-**Status:** M12–M15 merged; M16j and M16k studies complete, with no
+**Status:** M12–M15 merged; M16j and M16k studies complete, M16l under test, with no
 unqualified experimental models promoted. M17–M18 remain planned.
 **Repository:** https://github.com/AWDaley/QOX-Machine-Learning  
 **Baseline:** M11 resizable pixel-art viewer, M10 desktop launcher, M0–M9 simulation and neural-network systems.  
@@ -192,8 +192,11 @@ diagnostics showed **zero chosen planting actions across all six** despite
 legal planting opportunities; the original M4 plants regularly. No audit
 was opened or model promoted. The next M16l hypothesis should target
 verified crop-cycle credit and planting/navigation skill rather than
-untargeted input-memory tuning. See
-[M16k's full study](M16K_FARMER_TASK_MEMORY.md).
+untargeted input-memory tuning. M16l implements finite **training-only**
+plant→own-harvest→deposit event credit with two equal-budget arms and a
+separate held-out block; world physics and original M4 remain untouched.
+See [M16k's full study](M16K_FARMER_TASK_MEMORY.md) and
+[M16l's predeclared protocol](M16L_VERIFIED_CROP_CYCLE.md).
 Then finish M16 replication with
 independent partner policies and begin M17
 multi-seed ecological calibration before shipping a performance-focused M18
