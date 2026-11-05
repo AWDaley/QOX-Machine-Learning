@@ -493,7 +493,8 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
     diagnostic_keys = ("harvest_legal_steps", "harvest_chosen_steps",
                        "harvest_missed_steps", "fertilize_during_harvest_opportunity",
                        "ripe_visible_steps", "deposit_legal_steps",
-                       "deposit_chosen_steps", "plant_legal_steps", "plant_chosen_steps")
+                       "deposit_chosen_steps", "plant_legal_steps", "plant_chosen_steps",
+                       "plant_top2_legal_steps", "plant_probability_legal_sum")
     action_indices = {kind: next(i for i, a in enumerate(ACTIONS[Species.FARMER])
                                  if a.kind == kind)
                       for kind in (Kind.HARVEST, Kind.DEPOSIT, Kind.FERTILIZE, Kind.PLANT)}
@@ -547,6 +548,14 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                 diagnostics["deposit_chosen_steps"] += int(choice == action_indices[Kind.DEPOSIT])
                 diagnostics["plant_legal_steps"] += int(plant_legal)
                 diagnostics["plant_chosen_steps"] += int(choice == action_indices[Kind.PLANT])
+                if plant_legal and model is not None:
+                    # Descriptive probability inspection only: the policy's
+                    # deterministic argmax choice above remains untouched.
+                    probs = dist.probs[0]
+                    diagnostics["plant_probability_legal_sum"] += float(
+                        probs[action_indices[Kind.PLANT]].item())
+                    diagnostics["plant_top2_legal_steps"] += int(
+                        action_indices[Kind.PLANT] in probs.topk(2).indices.tolist())
             states, rewards, terminated, truncated, _ = env.step({name: choice})
             memory.advance(env.world.last_events, aid)
             total_reward += rewards[name]
@@ -592,4 +601,8 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
         report["chain_means"] = {
             key: round(float(np.mean([row["chain"][key] for row in results])), 4)
             for key in diagnostic_keys}
+        total_legal = sum(row["chain"]["plant_legal_steps"] for row in results)
+        report["plant_probability_when_legal"] = (
+            round(sum(row["chain"]["plant_probability_legal_sum"] for row in results) /
+                  total_legal, 6) if model is not None and total_legal else None)
     return report

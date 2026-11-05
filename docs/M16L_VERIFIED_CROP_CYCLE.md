@@ -1,8 +1,8 @@
 # M16l — Verified farmer crop-cycle credit
 
-**Status:** Predeclared matched study; no automatic promotion. The original
-M4 farmer remains installed unless a candidate passes unchanged food,
-manure, survival, health, and crop-damage development and blind-audit gates.
+**Status:** Implementation and full predeclared matched study complete;
+**0/6 development qualifiers**. The reserved blind audit was never opened.
+No model was promoted and the original M4 farmer remains installed.
 
 ## Motivation and hypothesis
 
@@ -84,7 +84,90 @@ statistically qualifying** local smoke test, use new output directories,
 
 ## Development and audit results
 
-*To be recorded only after the predeclared arms complete. Report every seed,
-control vs treatment, physical farming metrics, diagnostics, all development
-gate failures, and whether the reserved audit was ever opened. Never
-replace M4 on training reward alone.*
+All **96 stage checkpoints** were trained as planned. Results below are
+means on the paired 48-world *safe* development block, except threatened
+health from the paired 48-world threatened block. Figures report **real
+physical outcomes**, with no training-only bonus included.
+
+| Policy | Seed | Food deposited | Food harvested | Manure applied | Threatened final health | Development gate |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Original M4 (reference) | — | **3.2936** | **4.3924** | 2.2437 | 98.5000 | Reference |
+| No crop credit | 17 | 2.9753 | 2.0753 | 3.5781 | 98.7500 | Fail: food |
+| No crop credit | 37 | 2.9753 | 2.0753 | 4.0634 | 98.5000 | Fail: food |
+| No crop credit | 59 | 2.6778 | 1.7777 | 3.2838 | 98.7500 | Fail: food |
+| Crop credit 1 | 17 | 1.9167 | 1.0167 | 1.4185 | 98.7500 | Fail: food, manure, safe crop damage |
+| Crop credit 1 | 37 | 2.9837 | 2.0837 | 0.9983 | 99.0000 | Fail: food, manure |
+| Crop credit 1 | 59 | 2.9753 | 2.0753 | 0.2555 | 98.2500 | Fail: food, manure |
+
+Across seeds, the zero-credit control averaged **2.8761** deposited food,
+**1.9761** harvested food and **3.6418** manure; the crop-credit treatment
+averaged **2.6252** food, **1.7252** harvest and **0.8908** manure. The
+original M4 on the same safe seeds averaged **3.2936** deposited and
+**4.3924** harvested. Threatened survival remained **100% for all six**
+candidates. The credit treatment generally **worsened** food delivery and
+especially manure application, and no candidate passed the food gate.
+
+The paired bootstrap for the superficially closest food result,
+crop-credit **seed 37**, showed −0.3099 deposited food relative to M4
+(95% CI −0.5827 to −0.0410), −2.3087 harvested food (CI −3.5661 to
+−1.2208), and −1.2454 manure (CI −1.5776 to −0.8559). These comparisons
+are descriptive; the full predeclared multi-metric gate decides eligibility.
+
+### Training event credit versus frozen-policy behavior
+
+Training-metric files recorded successful planting events aggregated across
+the same 16,384 PPO decisions per seed:
+
+| Training seed | No crop credit: planted | Crop credit 1: planted | Credit awarded in treatment |
+| --- | ---: | ---: | ---: |
+| 17 | 130 | 150 | 67.7759 |
+| 37 | 147 | 190 | 82.8839 |
+| 59 | 155 | 183 | 87.4577 |
+| **Total** | **432** | **523** | **238.1175** |
+
+The credit arm elicited about **21.1% more successful planting events
+during stochastic PPO rollouts**. But that did **not** generalize into the
+preferred deterministic actions when each frozen network was evaluated.
+The trained networks still substantially favor actions other than planting.
+
+All seven policies were compared independently on the same **24 non-audit
+farmstead episodes**, seeds 1,750,000–1,750,023 (horizon 192). Legal/chosen
+planting and visible-ripe counts were predeclared. The probability of a
+planting action *conditional on its legality* and its top-two rank were
+added afterward as exploratory explanatory diagnostics; neither affects
+the gates, action selection or audit decision.
+
+| Policy | Plant legal steps / episode | Plant chosen / episode | Ripe-visible steps / episode | Plant probability when legal |
+| --- | ---: | ---: | ---: | ---: |
+| Original M4 | 5.17 | **2.08** | 114.38 | 0.158 |
+| No credit 17 | 1.67 | **0** | 10.50 | 0.084 |
+| No credit 37 | 1.67 | **0** | 10.63 | 0.084 |
+| No credit 59 | 4.58 | **0** | 97.58 | 0.129 |
+| Crop credit 17 | 1.00 | **0** | 52.79 | 0.151 |
+| Crop credit 37 | 1.67 | **0** | 16.08 | 0.111 |
+| Crop credit 59 | 1.67 | **0** | 78.92 | 0.105 |
+
+Every candidate had legal opportunities and **zero chosen planting**.
+The treatment seed-17 model even ranked planting in its top two actions
+at every legally available instance while still never ranking it first.
+In other words, positive plant-event credit during stochastic training
+was insufficient to restore **deterministic planting preference**.
+Exploration counts alone cannot demonstrate a capable agricultural policy.
+
+### Gate integrity and recommendation
+
+The aggregate sweep report records **`development_qualifiers: 0`**,
+`selected_before_audit: null`, `audit: null`, and
+`recommended_checkpoint: null`. None of the reserved 5,600,000/5,700,000
+audit episodes was opened. The immutable M4 SHA-256 was rechecked by
+the sweep and has not changed. All raw stage checkpoints, per-seed
+development comparisons, stage training metrics and seven chain traces
+are retained with the reproducibility archive.
+
+**Next hypothesis (M16m):** investigate *relative action preference* on
+legal planting states, particularly the competing top-ranked action,
+and test a dedicated planting/harvesting curriculum or targeted
+advantage/regularizer. Hold the fixed M4 model, deterministic evaluation,
+and same full food/manure/safety gates. Avoid further undirected crop-credit
+weight sweeps without evidence of restored preferred planting and full
+plant→harvest→deposit behavior.

@@ -551,5 +551,13 @@ physics, public observations, and the production M4 baseline are unchanged.
 
 Use `qox train-farmer --crop-cycle-credit 1` for a local training run, or
 `qox sweep-farmers --crop-cycle-credits 0 1` to compare the zero-credit
-control and shaped farmer with equal budgets. See
-[M16l protocol and results](docs/M16L_VERIFIED_CROP_CYCLE.md).
+control and shaped farmer with equal budgets.
+
+**Completed result:** 96 training segments, 0/6 development qualifiers,
+no blind audit or model promotion. The credit arm increased physical
+planting events **during stochastic training** (523 versus 432 across
+three seeds), yet every frozen candidate still chose **zero planting**
+in independent deterministic tests. Both candidate arms remained below
+M4 on food; the treatment also hurt manure performance. Subsequent
+diagnostics show that a plant action sometimes ranks second, but not first.
+See [M16l full protocol, results and next hypothesis](docs/M16L_VERIFIED_CROP_CYCLE.md).

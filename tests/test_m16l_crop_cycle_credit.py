@@ -76,6 +76,29 @@ def test_crop_cycle_credit_cap_seed_cost_and_equal_zero_control():
             treated.observe([], 5, invalid)
 
 
+def test_physical_world_emits_located_plant_event_that_triggers_credit():
+    from qox.actions import Kind
+    from qox.envs.core import QoxCoreEnv
+    from qox.perception import ACTIONS
+
+    env = QoxCoreEnv(scenario="agriculture", max_steps=12)
+    env.reset(seed=3461)
+    farmer = next(a for a in env.world.actors.values() if a.species == Species.FARMER)
+    tile = env.world.grid.get(farmer.x, farmer.y)
+    tile.planted, tile.crop, tile.fertility = False, 0.0, 1.0
+    farmer.carried_food = 2.0
+    action_index = next(i for i, action in enumerate(ACTIONS[Species.FARMER])
+                        if action.kind == Kind.PLANT)
+    env.step({f"farmer_{farmer.id}": action_index})
+    planted = [e for e in env.world.last_events
+               if e.kind == "plant" and e.actor_id == farmer.id]
+    assert len(planted) == 1
+    assert (planted[0].x, planted[0].y) == farmer.position
+    assert planted[0].amount == 0.3
+    delta = FarmerCropCycleLedger().observe(env.world.last_events, farmer.id, 1)
+    assert delta.planted == 1 and delta.training_bonus == pytest.approx(0.6)
+
+
 def test_training_options_sweep_budget_and_nonwriting_dry_run(tmp_path, capsys):
     pytest.importorskip("torch")
     from qox.cli import main
@@ -114,7 +137,7 @@ def test_training_options_sweep_budget_and_nonwriting_dry_run(tmp_path, capsys):
 def test_real_training_reports_credit_and_preserves_original_m4(tmp_path):
     torch = pytest.importorskip("torch")
     from qox.cli import main
-    from qox.learning.farmer_ppo import load_farmer
+    from qox.learning.farmer_ppo import evaluate_farmer, load_farmer
 
     m4 = tmp_path / "baseline.pt"
     baseline(m4)
@@ -130,6 +153,12 @@ def test_real_training_reports_credit_and_preserves_original_m4(tmp_path):
     report = json.loads(path.with_suffix(".metrics.json").read_text())
     assert report["crop_cycle_credit_awarded"] >= 0
     assert report["own_crop_food_deposited"] <= report["own_crops_harvested"]
+    evaluation = evaluate_farmer(
+        path, episodes=2, max_steps=18, scenario="agriculture", chain_diagnostics=True)
+    assert evaluation["plant_probability_when_legal"] is not None
+    assert 0 <= evaluation["plant_probability_when_legal"] <= 1
+    assert evaluation["chain_means"]["plant_top2_legal_steps"] <= evaluation[
+        "chain_means"]["plant_legal_steps"]
     assert m4.read_bytes() == original_bytes
 
 
