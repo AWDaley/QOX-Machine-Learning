@@ -27,6 +27,7 @@ class FarmerSweepOptions:
     crop_cycle_credits: tuple[float, ...] = (0.0,)
     food_anchor_kls: tuple[float, ...] = (0.0,)
     history_modes: tuple[str, ...] = ("none",)
+    plant_priorities: tuple[float, ...] = (0.0,)
     training_seeds: tuple[int, ...] = (17, 37, 59)
     worlds: int = 4
     rollout: int = 256
@@ -44,7 +45,7 @@ class FarmerSweepOptions:
         if (not self.survival_weights or not self.stage_budgets or not self.rehearsal_kls or
                 not self.interleave_cycles or not self.manure_credits or
                 not self.food_anchor_kls or not self.history_modes or
-                not self.crop_cycle_credits or
+                not self.crop_cycle_credits or not self.plant_priorities or
                 len(set(self.survival_weights)) != len(self.survival_weights) or
                 len(set(self.stage_budgets)) != len(self.stage_budgets) or
                 len(set(self.rehearsal_kls)) != len(self.rehearsal_kls) or
@@ -52,20 +53,22 @@ class FarmerSweepOptions:
                 len(set(self.manure_credits)) != len(self.manure_credits) or
                 len(set(self.food_anchor_kls)) != len(self.food_anchor_kls) or
                 len(set(self.history_modes)) != len(self.history_modes) or
-                len(set(self.crop_cycle_credits)) != len(self.crop_cycle_credits)):
+                len(set(self.crop_cycle_credits)) != len(self.crop_cycle_credits) or
+                len(set(self.plant_priorities)) != len(self.plant_priorities)):
             raise ValueError("Sweep settings must be nonempty and distinct")
         configs = (len(self.survival_weights) * len(self.stage_budgets) *
                    len(self.rehearsal_kls) * len(self.interleave_cycles) *
                    len(self.manure_credits) * len(self.food_anchor_kls) *
-                   len(self.history_modes) * len(self.crop_cycle_credits))
+                   len(self.history_modes) * len(self.crop_cycle_credits) *
+                   len(self.plant_priorities))
         if configs > 12:
             raise ValueError("Maximum twelve sweep configurations per experiment")
-        for weight, budget, kl, cycles, manure_credit, food_anchor_kl, history_mode, crop_credit in product(
+        for weight, budget, kl, cycles, manure_credit, food_anchor_kl, history_mode, crop_credit, priority in product(
                 self.survival_weights, self.stage_budgets, self.rehearsal_kls,
                 self.interleave_cycles, self.manure_credits, self.food_anchor_kls,
-                self.history_modes, self.crop_cycle_credits):
+                self.history_modes, self.crop_cycle_credits, self.plant_priorities):
             self.stage_options(weight, budget, kl, cycles, manure_credit,
-                               food_anchor_kl, history_mode, crop_credit)
+                               food_anchor_kl, history_mode, crop_credit, priority)
 
     def stage_options(self, weight: float, budget: int,
                       rehearsal_kl: float = 0.0,
@@ -73,7 +76,8 @@ class FarmerSweepOptions:
                       manure_credit: float = 0.0,
                       food_anchor_kl: float = 0.0,
                       history_mode: str = "none",
-                      crop_cycle_credit: float = 0.0) -> StagedFarmerOptions:
+                      crop_cycle_credit: float = 0.0,
+                      plant_priority_weight: float = 0.0) -> StagedFarmerOptions:
         return StagedFarmerOptions(
             training_seeds=self.training_seeds, steps_per_stage=budget,
             worlds=self.worlds, rollout=self.rollout, epochs=self.epochs,
@@ -86,7 +90,8 @@ class FarmerSweepOptions:
             rehearsal_max_steps=self.rehearsal_max_steps,
             interleave_cycles=interleave_cycles, manure_credit=manure_credit,
             food_anchor_kl=food_anchor_kl, history_mode=history_mode,
-            crop_cycle_credit=crop_cycle_credit)
+            crop_cycle_credit=crop_cycle_credit,
+            plant_priority_weight=plant_priority_weight)
 
     def estimate(self) -> dict:
         # The PPO trainer finishes the full last rollout of each stage.
@@ -94,6 +99,7 @@ class FarmerSweepOptions:
                      len(self.survival_weights) * len(self.rehearsal_kls) *
                      len(self.manure_credits) * len(self.food_anchor_kls) *
                      len(self.history_modes) * len(self.crop_cycle_credits) *
+                     len(self.plant_priorities) *
                      sum(((((budget // cycles + self.rollout - 1) // self.rollout) *
                             self.rollout) * cycles)
                          for budget in self.stage_budgets
@@ -101,14 +107,15 @@ class FarmerSweepOptions:
         configs = (len(self.survival_weights) * len(self.stage_budgets) *
                    len(self.rehearsal_kls) * len(self.interleave_cycles) *
                    len(self.manure_credits) * len(self.food_anchor_kls) *
-                   len(self.history_modes) * len(self.crop_cycle_credits))
+                   len(self.history_modes) * len(self.crop_cycle_credits) *
+                   len(self.plant_priorities))
         return {
             "configurations": configs,
             "training_runs": (len(self.training_seeds) * len(STAGES) *
                               len(self.survival_weights) * len(self.stage_budgets) *
                               len(self.rehearsal_kls) * len(self.manure_credits) *
                               len(self.food_anchor_kls) * len(self.history_modes) *
-                              len(self.crop_cycle_credits) *
+                              len(self.crop_cycle_credits) * len(self.plant_priorities) *
                               sum(self.interleave_cycles)),
             "approximate_ppo_decisions": decisions,
             "development_world_episodes": (configs * len(self.training_seeds) *
@@ -119,6 +126,7 @@ class FarmerSweepOptions:
                                          len(self.manure_credits) *
                                          len(self.food_anchor_kls) * len(self.history_modes) *
                                          len(self.crop_cycle_credits) *
+                                         len(self.plant_priorities) *
                                          sum(kl > 0 for kl in self.rehearsal_kls) *
                                          3 * self.rehearsal_episodes),
             "audit_world_episodes_if_selected": (len(SCENARIOS) *
@@ -130,7 +138,7 @@ class FarmerSweepOptions:
 def _slug(weight: float, budget: int, rehearsal_kl: float = 0.0,
           interleave_cycles: int = 1, manure_credit: float = 0.0,
           food_anchor_kl: float = 0.0, history_mode: str = "none",
-          crop_cycle_credit: float = 0.0) -> str:
+          crop_cycle_credit: float = 0.0, plant_priority_weight: float = 0.0) -> str:
     base = f"safety_{weight:.17g}".replace(".", "p") + f"_steps_{budget}"
     if rehearsal_kl:
         base += f"_kl_{rehearsal_kl:.17g}".replace(".", "p")
@@ -144,6 +152,8 @@ def _slug(weight: float, budget: int, rehearsal_kl: float = 0.0,
         base += f"_history_{history_mode}"
     if crop_cycle_credit:
         base += f"_cropcycle_{crop_cycle_credit:.17g}".replace(".", "p")
+    if plant_priority_weight:
+        base += f"_plantpriority_{plant_priority_weight:.17g}".replace(".", "p")
     return base
 
 
@@ -165,16 +175,18 @@ def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
 
     configs: list[dict] = []
     eligible: list[tuple[float, int, int, Path]] = []
-    for weight, budget, rehearsal_kl, cycles, manure_credit, food_anchor_kl, history_mode, crop_credit in product(
+    for weight, budget, rehearsal_kl, cycles, manure_credit, food_anchor_kl, history_mode, crop_credit, priority in product(
             options.survival_weights, options.stage_budgets, options.rehearsal_kls,
             options.interleave_cycles, options.manure_credits, options.food_anchor_kls,
-            options.history_modes, options.crop_cycle_credits):
+            options.history_modes, options.crop_cycle_credits, options.plant_priorities):
         location = output_dir / _slug(weight, budget, rehearsal_kl, cycles,
-                                      manure_credit, food_anchor_kl, history_mode, crop_credit)
+                                      manure_credit, food_anchor_kl, history_mode,
+                                      crop_credit, priority)
         result = train_farmer_staged(
             baseline, location,
             options.stage_options(weight, budget, rehearsal_kl, cycles,
-                                  manure_credit, food_anchor_kl, history_mode, crop_credit),
+                                  manure_credit, food_anchor_kl, history_mode,
+                                  crop_credit, priority),
             audit_enabled=False)
         config_index = len(configs)
         entries = []
@@ -194,6 +206,7 @@ def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
                         "food_anchor_kl": food_anchor_kl,
                         "history_mode": history_mode,
                         "crop_cycle_credit": crop_credit,
+                        "plant_priority_weight": priority,
                         "rehearsal": result.get("rehearsal"),
                         "location": str(location), "replicas": entries})
 
@@ -212,6 +225,7 @@ def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
                   "food_anchor_kl": config["food_anchor_kl"],
                   "history_mode": config["history_mode"],
                   "crop_cycle_credit": config["crop_cycle_credit"],
+                  "plant_priority_weight": config["plant_priority_weight"],
                   "training_seed": config["replicas"][replica_index]["training_seed"],
                   "candidate": str(candidate), "development_food_gain": score}
 
@@ -241,7 +255,10 @@ def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
         raise RuntimeError("Farmer baseline checkpoint changed during the sweep")
     approved = bool(audit and audit["passed"])
     report = {
-        "version": 7, "method": "farmer_verified_crop_cycle_sweep",
+        "version": (7 if options.plant_priorities == (0.0,) else 8),
+        "method": ("farmer_verified_crop_cycle_sweep"
+                   if options.plant_priorities == (0.0,)
+                   else "farmer_plant_action_priority_sweep"),
         "baseline": str(baseline), "baseline_sha256": original_hash,
         "options": asdict(options), "cost_estimate": options.estimate(),
         "configurations": configs, "development_qualifiers": len(eligible),
@@ -264,6 +281,11 @@ def run_farmer_sweep(baseline: str | Path, output_dir: str | Path,
                   "of a conservatively limited owned harvest inventory. "
                   "The immediate planting bonus is capped per episode; "
                   "all shaping is training-only, never a modified world reward. "
+                  "M16m selectively applies a normalized PLANT-logit margin "
+                  "on legal current PPO states where the immutable M4 teacher "
+                  "prefers planting; zero is an otherwise matched control. "
+                  "The margin changes optimization only, never chosen actions "
+                  "by fiat, masks, world physics or evaluation rewards. "
                   "Development comparisons are shared across all settings, including "
                   "the no-rehearsal control. Teacher rehearsal uses disjoint training "
                   "seeds and never draws on evaluation cases. "

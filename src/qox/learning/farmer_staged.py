@@ -42,6 +42,7 @@ class StagedFarmerOptions:
     crop_cycle_credit: float = 0.0
     food_anchor_kl: float = 0.0
     history_mode: str = "none"
+    plant_priority_weight: float = 0.0
 
     def __post_init__(self) -> None:
         seeds = self.training_seeds
@@ -75,6 +76,8 @@ class StagedFarmerOptions:
             raise ValueError("Crop-cycle credit must be between 0 and 2")
         if not 0.0 <= self.food_anchor_kl <= 10.0:
             raise ValueError("Food anchor KL must be between 0 and 10")
+        if not 0.0 <= self.plant_priority_weight <= 10.0:
+            raise ValueError("Plant priority weight must be between 0 and 10")
         if self.history_mode not in FARMER_HISTORY_MODES:
             raise ValueError("Unknown farmer task-history mode")
         if not 1 <= self.rehearsal_episodes < 100_000 or self.rehearsal_max_steps < 1:
@@ -202,14 +205,16 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                     manure_credit=options.manure_credit,
                     crop_cycle_credit=options.crop_cycle_credit,
                     food_anchor_kl=options.food_anchor_kl,
-                    history_mode=options.history_mode)
-                if rehearsal is None and not options.food_anchor_kl:
+                    history_mode=options.history_mode,
+                    plant_priority_weight=options.plant_priority_weight)
+                if (rehearsal is None and not options.food_anchor_kl and
+                        not options.plant_priority_weight):
                     result = train_farmer(stage_options, checkpoint, init_checkpoint=previous)
                 else:
                     kwargs = {}
                     if rehearsal is not None:
                         kwargs["rehearsal"] = rehearsal
-                    if options.food_anchor_kl:
+                    if options.food_anchor_kl or options.plant_priority_weight:
                         kwargs["food_anchor_checkpoint"] = baseline
                     result = train_farmer(stage_options, checkpoint,
                                           init_checkpoint=previous, **kwargs)
@@ -222,6 +227,9 @@ def train_farmer_staged(baseline: str | Path, output_dir: str | Path,
                     "final_rehearsal_kl": result.get("final_rehearsal_kl", 0.0),
                     "food_anchor_kl": result.get("final_food_anchor_kl", 0.0),
                     "food_anchor_fraction": result.get("final_food_anchor_fraction", 0.0),
+                    "plant_priority_weight": options.plant_priority_weight,
+                    "plant_priority_loss": result.get("final_plant_priority_loss", 0.0),
+                    "plant_priority_fraction": result.get("final_plant_priority_fraction", 0.0),
                     "history_mode": options.history_mode,
                     "manure_collected": result.get("manure_collected", 0.0),
                     "manure_applied": result.get("manure_applied", 0.0),

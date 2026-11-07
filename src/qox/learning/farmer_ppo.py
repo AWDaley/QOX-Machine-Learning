@@ -6,6 +6,7 @@ policy is species-shared, with no omniscient knowledge or scripted commands.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
@@ -99,6 +100,7 @@ class FarmerTrainOptions:
     crop_cycle_credit: float = 0.0
     food_anchor_kl: float = 0.0
     history_mode: str = "none"
+    plant_priority_weight: float = 0.0
 
     def __post_init__(self) -> None:
         if self.scenario not in FARMER_SCENARIOS:
@@ -122,6 +124,8 @@ class FarmerTrainOptions:
             raise ValueError("Crop-cycle credit must be between 0 and 2")
         if not 0.0 <= self.food_anchor_kl <= 10.0:
             raise ValueError("Food anchor KL must be between 0 and 10")
+        if not 0.0 <= self.plant_priority_weight <= 10.0:
+            raise ValueError("Plant priority weight must be between 0 and 10")
         if self.history_mode not in FARMER_HISTORY_MODES:
             raise ValueError("Unknown farmer task-history mode")
 
@@ -194,6 +198,33 @@ def _on_policy_food_anchor(teacher: FarmerPolicy, student: Categorical,
     return (divergence * focus.to(divergence.dtype)).mean(), focus.float().mean()
 
 
+def _plant_action_priority_loss(teacher: FarmerPolicy, student: Categorical,
+                                observations: torch.Tensor,
+                                masks: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Raise legal PLANT above competitors in M4's *on-policy* planting states.
+
+    The frozen M4 teacher selects which current actor-local observations merit
+    planting. This margin regularizes learned logits; it never overrides a
+    QOX action, alters the legal mask or changes the world's reward.
+    Normalize by the number of selected samples so rare planting opportunities
+    do not disappear into an all-state mean. No focus means zero gradient.
+    """
+    plant = next(i for i, action in enumerate(ACTIONS[Species.FARMER])
+                 if action.kind == Kind.PLANT)
+    with torch.no_grad():
+        reference, _ = teacher(
+            observations[:, :observation_size(Species.FARMER)], masks)
+        focus = (reference.probs.argmax(dim=1) == plant) & (masks[:, plant] > 0)
+    if not bool(focus.any()):
+        return student.logits.sum() * 0.0, focus.float().mean()
+    student_logits = student.logits[focus]
+    # Every non-PLANT action is a competitor; masked options have -1e9 logits.
+    competing = student_logits.clone()
+    competing[:, plant] = -1e9
+    margin = student_logits[:, plant] - competing.max(dim=1).values
+    return nn.functional.relu(0.25 - margin).mean(), focus.float().mean()
+
+
 def train_farmer(options: FarmerTrainOptions, output: str | Path,
                  init_checkpoint: str | Path | None = None, *,
                  rehearsal: FarmerRehearsalData | None = None,
@@ -204,6 +235,8 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         raise ValueError("Rehearsal KL requires frozen teacher demonstrations")
     if options.food_anchor_kl and food_anchor_checkpoint is None:
         raise ValueError("Food anchor KL requires an immutable teacher checkpoint")
+    if options.plant_priority_weight and food_anchor_checkpoint is None:
+        raise ValueError("Plant priority requires an immutable M4 teacher checkpoint")
     if options.rehearsal_kl and rehearsal is not None:
         n_examples = rehearsal.observations.shape[0]
         count = len(ACTIONS[Species.FARMER])
@@ -242,7 +275,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
     else:
         raise ValueError("Initial farmer checkpoint task-history mode mismatch")
     food_teacher = (load_farmer(food_anchor_checkpoint)
-                    if options.food_anchor_kl else None)
+                    if options.food_anchor_kl or options.plant_priority_weight else None)
     if food_teacher is not None:
         food_teacher.eval()
         food_teacher.requires_grad_(False)
@@ -364,6 +397,7 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         last_loss = 0.0
         last_rehearsal_kl = 0.0
         food_anchor_penalty = food_anchor_coverage = 0.0
+        plant_priority_penalty = plant_priority_coverage = 0.0
         for _ in range(options.epochs):
             for batch in torch.randperm(n).split(options.minibatch):
                 distribution, predicted = model(xs[batch], ms[batch])
@@ -387,12 +421,18 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
                     replay_kl = kl_divergence(teacher, student).mean()
                     loss = loss + options.rehearsal_kl * replay_kl
                     last_rehearsal_kl = float(replay_kl.detach())
-                if food_teacher is not None:
+                if food_teacher is not None and options.food_anchor_kl:
                     anchor_kl, anchor_fraction = _on_policy_food_anchor(
                         food_teacher, distribution, xs[batch], ms[batch])
                     loss = loss + options.food_anchor_kl * anchor_kl
                     food_anchor_penalty += float(anchor_kl.detach()) * len(batch)
                     food_anchor_coverage += float(anchor_fraction.detach()) * len(batch)
+                if food_teacher is not None and options.plant_priority_weight:
+                    priority_loss, priority_fraction = _plant_action_priority_loss(
+                        food_teacher, distribution, xs[batch], ms[batch])
+                    loss = loss + options.plant_priority_weight * priority_loss
+                    plant_priority_penalty += float(priority_loss.detach()) * len(batch)
+                    plant_priority_coverage += float(priority_fraction.detach()) * len(batch)
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -401,11 +441,15 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
         steps += n
         mean_food_anchor_kl = food_anchor_penalty / (options.epochs * n)
         mean_food_anchor_fraction = food_anchor_coverage / (options.epochs * n)
+        mean_plant_priority_loss = plant_priority_penalty / (options.epochs * n)
+        mean_plant_priority_fraction = plant_priority_coverage / (options.epochs * n)
         history.append({"farmer_steps": steps, "completed_episodes": len(completed_returns),
                         "loss": round(last_loss, 5),
                         "rehearsal_kl": round(last_rehearsal_kl, 6),
                         "food_anchor_kl": round(mean_food_anchor_kl, 6),
                         "food_anchor_fraction": round(mean_food_anchor_fraction, 6),
+                        "plant_priority_loss": round(mean_plant_priority_loss, 6),
+                        "plant_priority_fraction": round(mean_plant_priority_fraction, 6),
                         "manure_collected": round(manure_collected, 4),
                         "manure_applied": round(manure_applied, 4),
                         "manure_credit_awarded": round(manure_credit_awarded, 4),
@@ -440,6 +484,8 @@ def train_farmer(options: FarmerTrainOptions, output: str | Path,
               "final_rehearsal_kl": round(last_rehearsal_kl, 6),
               "final_food_anchor_kl": round(mean_food_anchor_kl, 6),
               "final_food_anchor_fraction": round(mean_food_anchor_fraction, 6),
+              "final_plant_priority_loss": round(mean_plant_priority_loss, 6),
+              "final_plant_priority_fraction": round(mean_plant_priority_fraction, 6),
               "manure_collected": round(manure_collected, 4),
               "manure_applied": round(manure_applied, 4),
               "manure_credit_awarded": round(manure_credit_awarded, 4),
@@ -508,6 +554,7 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
         total_reward, sheltered_steps = 0.0, 0
         memory = FarmerTaskHistory()
         diagnostics = dict.fromkeys(diagnostic_keys, 0)
+        plant_competitors: Counter[str] = Counter()
         for _ in range(max_steps):
             state = states[name]
             if mode == "random":
@@ -548,6 +595,8 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                 diagnostics["deposit_chosen_steps"] += int(choice == action_indices[Kind.DEPOSIT])
                 diagnostics["plant_legal_steps"] += int(plant_legal)
                 diagnostics["plant_chosen_steps"] += int(choice == action_indices[Kind.PLANT])
+                if plant_legal and choice != action_indices[Kind.PLANT]:
+                    plant_competitors[ACTIONS[Species.FARMER][choice].kind.value] += 1
                 if plant_legal and model is not None:
                     # Descriptive probability inspection only: the policy's
                     # deterministic argmax choice above remains untouched.
@@ -584,6 +633,7 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
                         "crop_eaten_by_cows": round(crop_eaten, 3)}
         if chain_diagnostics:
             result["chain"] = diagnostics
+            result["plant_competitors"] = dict(sorted(plant_competitors.items()))
         results.append(result)
     def avg(key: str) -> float:
         return round(float(np.mean([row[key] for row in results])), 4)
@@ -605,4 +655,6 @@ def evaluate_farmer(checkpoint: str | Path | None = None, episodes: int = 20,
         report["plant_probability_when_legal"] = (
             round(sum(row["chain"]["plant_probability_legal_sum"] for row in results) /
                   total_legal, 6) if model is not None and total_legal else None)
+        report["plant_competitors"] = dict(sorted(
+            sum((Counter(row["plant_competitors"]) for row in results), Counter()).items()))
     return report
