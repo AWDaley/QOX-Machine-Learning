@@ -576,4 +576,9 @@ or give the agent new information. The default weight `0` preserves prior
 training behavior. The experiment pairs `--plant-priorities 0 1` on the
 same M4 baseline, 3 seeds, 4 cycles, and held-out food/manure/safety gates.
 
-See [M16m preregistered experiment and action diagnosis](docs/M16M_PLANT_ACTION_PRIORITY.md).
+**Completed result:** 96 PPO segments, 0/6 development qualifiers, audit
+unopened and M4 preserved. Training plantings rose **432→604**, and one
+of three treated frozen policies recovered some greedy PLANT actions,
+but all six policies still missed M4's food gate. The treatment's mean
+held-out manure use fell from **3.74** in the control to **0.94**.
+See [M16m full protocol, controlled results and diagnosis](docs/M16M_PLANT_ACTION_PRIORITY.md).

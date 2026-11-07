@@ -1,8 +1,8 @@
 # M16m — Frozen-M4 planting-action preference study
 
-**Status:** Predeclared matched protocol. Frozen-policy action competition was
-diagnosed on a disjoint exploratory block before selecting this intervention.
-Results and promotion decisions are appended only after the full run.
+**Status:** Full preregistered two-arm study complete. **0/6 development
+qualifiers.** The single-use blind audit was never opened, no candidate was
+promoted, and the original M4 checkpoint is unchanged.
 
 ## What M16l missed
 
@@ -93,4 +93,77 @@ Remove `--dry-run` to execute. Reserve a new output directory each time.
 
 ## Full study results
 
-Pending full locked run.
+All **96 PPO segments** were completed, totaling **98,304 farmer action
+decisions** and **1,728 development-world episodes**. On the predeclared
+48-world **safe** development set (seeds 6,600,000–6,600,047), the original
+M4 deposited **3.1880**, harvested **3.7910**, and applied **2.4669**
+units of manure. In the threatened block, original M4 final health averaged
+**96.7083**. Below, health comes from the threatened block; other quantities
+come from the safe block. All are physical outcomes, **not PPO shaping**.
+
+| Model | Seed | Food deposited | Harvested | Manure applied | Threatened final health | Failed gates |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| M4 (reference) | — | **3.1880** | **3.7910** | 2.4669 | 96.7083 | Reference |
+| Priority `0` | 17 | 2.9753 | 2.0753 | 3.9494 | 96.4583 | Food |
+| Priority `0` | 37 | 2.9753 | 2.0753 | 3.7163 | 96.4583 | Food |
+| Priority `0` | 59 | 2.3702 | 1.4702 | 3.5434 | 95.7083 | Food |
+| Priority `1` | 17 | 2.7333 | 2.0333 | 1.7321 | 94.9583 | Food, manure, threatened health |
+| Priority `1` | 37 | 3.1097 | 2.2097 | 0.2533 | 96.9583 | Food, manure |
+| Priority `1` | 59 | 2.9753 | 2.0753 | 0.8241 | 96.7083 | Food, manure |
+
+Across the three matched seeds, control means were **2.7736** food,
+**1.8736** harvested and **3.7364** manure; treatment means were
+**2.9394** food, **2.1061** harvested and **0.9365** manure. The targeted
+margin yielded a small descriptive food improvement of **+0.1658** over
+the control mean, but remained below original M4 food delivery and
+substantially impaired manure use. The **unchanged full gate failed all
+six candidates**, so **no audit candidates were selected** and the
+reserved 7,600,000/7,700,000 seed blocks were never evaluated. These
+sample means are descriptive, not proof of generalization.
+
+### Real training versus deterministic policy
+
+Training used identical 16,384-decision budgets per seed. Successful
+plantings were as follows:
+
+| Seed | Priority `0`: planted | Priority `1`: planted | Share of treated PPO states where M4 preferred legal PLANT |
+| --- | ---: | ---: | ---: |
+| 17 | 130 | 231 | 4.61% |
+| 37 | 147 | 187 | 4.93% |
+| 59 | 155 | 186 | 3.98% |
+| **Total** | **432** | **604** | — |
+
+Targeting M4-preferred planting states increased **successful stochastic
+training plantings by 39.8%**. Unlike M16l, one treatment seed also
+recovered *some* greedy planting in the separate non-audit 24-case
+diagnostic at seed 1,850,000. Still, two of three trained treatment
+policies planted zero, and all three were below the original M4.
+
+| Frozen policy | Legal planting opportunities / episode | Greedy PLANT / episode | PLANT probability when legal | Dominant missed action |
+| --- | ---: | ---: | ---: | --- |
+| Original M4 | 8.0417 | **3.1250** | 0.1673 | DEPOSIT and REST, 59 each |
+| Priority `0`, seed 17 | 1.6667 | 0 | 0.0838 | DEPOSIT |
+| Priority `0`, seed 37 | 1.6667 | 0 | 0.0836 | DEPOSIT |
+| Priority `0`, seed 59 | 3.9583 | 0 | 0.1276 | DEPOSIT, with manure actions |
+| Priority `1`, seed 17 | 2.3333 | **0.6667** | 0.2000 | DEPOSIT |
+| Priority `1`, seed 37 | 1.6667 | 0 | 0.1559 | DEPOSIT |
+| Priority `1`, seed 59 | 1.6667 | 0 | 0.1093 | DEPOSIT |
+
+The M16m mechanism is therefore **partly effective at teaching action
+ranking** in one seed but does not produce a farmer worthy of replacing
+M4. The treatment may shift attention from collecting and applying
+manure into planting without completing sufficient productive cycles.
+The action histogram also shows DEPOSIT still displacing PLANT in most
+missed treated-policy opportunities; the intervention did not eliminate
+the action-ranking failure. The identical control-arm training planting
+counts (130/147/155) reproduce M16l's zero-crop-credit controls and
+support budget and seed consistency.
+
+### Next hypothesis (not tested here)
+
+Rather than increasing this loss weight or cherry-picking the one seed,
+M16n should test **balanced crop/manure skill retention**: a fixed,
+training-only rehearsal set with higher coverage of M4 planting contexts
+*and* a matched preserve-manure constraint. Predeclare the held-out gate,
+single audit, total training budget and scripted/random descriptive
+controls again. The original M4 is still the safest production choice.
