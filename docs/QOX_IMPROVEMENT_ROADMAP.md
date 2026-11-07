@@ -201,6 +201,20 @@ All six failed the M4 food gate, and the treatment also degraded manure;
 no audit opened and the original M4 remains untouched. M16m should
 focus on the action-ranking and dedicated planting-curriculum failure
 rather than increasing crop-credit strength alone.
+M16m's additional action-ranking diagnostic confirms that **DEPOSIT**
+displaces PLANT in 222/279 legal planting opportunities in six frozen
+M16l candidates. The next matched intervention is a **training-only**
+margin for teacher-preferred planting versus the strongest alternative,
+using frozen original M4 and the same learner states; zero-margin control
+and original safety/food gate remain in place. See
+[M16m's completed controlled study](M16M_PLANT_ACTION_PRIORITY.md):
+the loss raised training plantings from 432 to 604 and recovered some
+greedy planting for **one of three** treatment seeds, but **0/6 candidates
+qualified**. Food remained below original M4 and manure retention became
+much worse under the priority term (mean 0.94 versus 3.74 in controls).
+No audit or promotion; M16n should test balanced crop/manure rehearsal
+coverage under another predeclared paired comparison, not just higher
+plant-priority loss.
 See [M16k's full study](M16K_FARMER_TASK_MEMORY.md) and
 [M16l's predeclared protocol](M16L_VERIFIED_CROP_CYCLE.md).
 Then finish M16 replication with

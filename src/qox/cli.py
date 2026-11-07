@@ -114,6 +114,8 @@ def parser() -> argparse.ArgumentParser:
                               help="M16l: training bonus for verified planting and owned crop harvest/deposit")
     train_farmer.add_argument("--food-anchor-kl", type=float, default=0.0,
                               help="M16j: frozen-M4 KL on current food-task PPO states")
+    train_farmer.add_argument("--plant-priority", type=float, default=0.0,
+                              help="M16m: M4-guided legal planting-action logit margin")
     train_farmer.add_argument("--food-anchor-checkpoint", type=Path,
                               help="M16j: separate immutable teacher for food anchoring")
     train_farmer.add_argument("--history-mode", choices=("none", "masked", "events"),
@@ -154,6 +156,8 @@ def parser() -> argparse.ArgumentParser:
                         help="M16l: verified crop-cycle training bonus; 0 is control")
     staged.add_argument("--food-anchor-kl", type=float, default=0.0,
                         help="M16j: selectively anchor fresh food-task states to baseline")
+    staged.add_argument("--plant-priority", type=float, default=0.0,
+                        help="M16m: weight of frozen-M4 legal planting preference margin")
     staged.add_argument("--history-mode", choices=("none", "masked", "events"),
                         default="none", help="M16k: local-event memory or masked v2 control")
     staged.add_argument("--worlds", type=int, default=4)
@@ -188,6 +192,8 @@ def parser() -> argparse.ArgumentParser:
                        help="M16l: compare verified crop-cycle shaping; include 0 control")
     sweep.add_argument("--food-anchor-kls", type=float, nargs="+", default=[0.0],
                        help="M16j: compare baseline KL on current food-task states; 0 control")
+    sweep.add_argument("--plant-priorities", type=float, nargs="+", default=[0.0],
+                       help="M16m: compare M4-guided legal planting margins; include 0")
     sweep.add_argument("--history-modes", nargs="+", choices=("none", "masked", "events"),
                        default=["none"], help="M16k: matched v2 masked vs event-memory arms")
     sweep.add_argument("--training-seeds", type=int, nargs="+", default=[17, 37, 59])
@@ -602,6 +608,7 @@ def main(argv: list[str] | None = None) -> int:
             manure_credits=tuple(args.manure_credits),
             crop_cycle_credits=tuple(args.crop_cycle_credits),
             food_anchor_kls=tuple(args.food_anchor_kls),
+            plant_priorities=tuple(args.plant_priorities),
             history_modes=tuple(args.history_modes),
             training_seeds=tuple(args.training_seeds),
             worlds=args.worlds, rollout=args.rollout, epochs=args.epochs,
@@ -641,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
             manure_credit=args.manure_credit,
             crop_cycle_credit=args.crop_cycle_credit,
             food_anchor_kl=args.food_anchor_kl,
+            plant_priority_weight=args.plant_priority,
             history_mode=args.history_mode)
         report = train_farmer_staged(args.baseline, args.output_dir, options)
         print(json.dumps({"summary": str(args.output_dir / "summary.json"),
@@ -675,6 +683,7 @@ def main(argv: list[str] | None = None) -> int:
                 manure_credit=args.manure_credit,
                 crop_cycle_credit=args.crop_cycle_credit,
                 food_anchor_kl=args.food_anchor_kl,
+                plant_priority_weight=args.plant_priority,
                 history_mode=args.history_mode), args.output,
                 food_anchor_checkpoint=args.food_anchor_checkpoint)
             print(json.dumps({k: v for k, v in report.items()

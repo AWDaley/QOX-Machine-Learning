@@ -561,3 +561,24 @@ in independent deterministic tests. Both candidate arms remained below
 M4 on food; the treatment also hurt manure performance. Subsequent
 diagnostics show that a plant action sometimes ranks second, but not first.
 See [M16l full protocol, results and next hypothesis](docs/M16L_VERIFIED_CROP_CYCLE.md).
+
+## M16m — Farmer planting-action priority experiment
+
+M16m exposes a read-only `plant_competitors` histogram in
+`qox eval-farmer --chain-diagnostics`. Across the six M16l frozen
+candidates, **222 of 279 missed opportunities to plant** were spent
+depositing instead; every candidate still planted zero. This motivates an
+optional **training-only** `--plant-priority` loss: when the immutable
+original M4 farmer would choose a legal PLANT action on the learner's
+current observations, increase the student's PLANT logit above its nearest
+competitor. It does not issue an action, change masks or evaluation rewards,
+or give the agent new information. The default weight `0` preserves prior
+training behavior. The experiment pairs `--plant-priorities 0 1` on the
+same M4 baseline, 3 seeds, 4 cycles, and held-out food/manure/safety gates.
+
+**Completed result:** 96 PPO segments, 0/6 development qualifiers, audit
+unopened and M4 preserved. Training plantings rose **432→604**, and one
+of three treated frozen policies recovered some greedy PLANT actions,
+but all six policies still missed M4's food gate. The treatment's mean
+held-out manure use fell from **3.74** in the control to **0.94**.
+See [M16m full protocol, controlled results and diagnosis](docs/M16M_PLANT_ACTION_PRIORITY.md).
